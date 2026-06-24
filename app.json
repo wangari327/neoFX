@@ -33,9 +33,8 @@
       "required": false
     },
     "DERIV_APP_ID": {
-      "description": "Deriv app ID used for REST and OTP requests.",
-      "value": "1089",
-      "required": false
+      "description": "App ID from a PAT application you registered on developers.deriv.com.",
+      "required": true
     },
     "DERIV_API_BASE_URL": {
       "description": "Deriv REST base URL.",

@@ -79,12 +79,18 @@ function sanitizeStartPayload(payload = {}) {
   const mode = payload.mode === 'real' ? 'real' : 'demo';
   const token = resolveToken(payload.token);
   const accountId = String(payload.accountId || process.env.DERIV_ACCOUNT_ID || '').trim();
-  const appId = String(process.env.DERIV_APP_ID || '1089').trim();
+  const appId = String(process.env.DERIV_APP_ID || '').trim();
   const apiBaseUrl = String(process.env.DERIV_API_BASE_URL || 'https://api.derivws.com').trim();
 
   if (seed < 1) throw new Error('Seed must be at least 1.00.');
   if (target <= seed) throw new Error('Target must be greater than seed.');
   if (!token) throw new Error('A Deriv API token is required.');
+  if (!appId || appId === '1089') {
+    throw new Error(
+      'DERIV_APP_ID is required. Register a new PAT application on developers.deriv.com and use its App ID. ' +
+      'The legacy 1089 App ID does not work with the current API.'
+    );
+  }
 
   return {
     mode,

@@ -73,7 +73,7 @@ http://localhost:3000
 PORT=3000
 DERIV_API_TOKEN=
 DERIV_ACCOUNT_ID=
-DERIV_APP_ID=1089
+DERIV_APP_ID=
 DERIV_API_BASE_URL=https://api.derivws.com
 DEFAULT_MODE=demo
 SYMBOL=R_100
@@ -89,7 +89,7 @@ GUIDE_FILTERS=true
 STRICT_BAR_FILTERS=false
 ```
 
-`DERIV_API_TOKEN` is the main token the bot uses. `DERIV_ACCOUNT_ID` is optional and only needed if you want to pin a specific account instead of letting the bot pick the first active demo or real account that matches the selected mode.
+`DERIV_API_TOKEN` is the main token the bot uses. `DERIV_APP_ID` must be the App ID from a new PAT application you registered on `developers.deriv.com`; do not reuse the old legacy `1089` App ID. `DERIV_ACCOUNT_ID` is optional and only needed if you want to pin a specific account instead of letting the bot pick the first active demo or real account that matches the selected mode.
 
 ## API Tokens
 
@@ -98,10 +98,11 @@ Create your token in the Deriv dashboard:
 1. Log in to the Deriv account you want to use.
 2. Open the API tokens area in your account settings/dashboard.
 3. Create a token with the `trade` scope.
-4. Add `account_manage` only if you plan to extend the app to create or reset accounts later.
-5. Copy the token once and store it in `.env` or paste it into the dashboard for a one-off run.
+4. Open `developers.deriv.com`, register a new application of type `PAT`, and copy the new App ID into `DERIV_APP_ID`.
+5. Add `account_manage` only if you plan to extend the app to create or reset accounts later.
+6. Copy the token once and store it in `.env` or paste it into the dashboard for a one-off run.
 
-The current API docs treat the token as general authorization, not as the demo/real switch. The bot uses the token to request your account list, then it selects a demo or real account by account type and requests an OTP for that account. If you know the exact account ID you want, put it in `DERIV_ACCOUNT_ID`.
+The current API docs treat the token as general authorization, not as the demo/real switch. The bot uses the token to request your account list, then it selects a demo or real account by account type and requests an OTP for that account. If you know the exact account ID you want, put it in `DERIV_ACCOUNT_ID`. If you still see 401s after updating the token, the usual culprit is an old App ID or a PAT/OAuth app-type mismatch.
 
 ## Heroku Deployment
 
