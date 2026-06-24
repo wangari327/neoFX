@@ -281,6 +281,9 @@ function summarizeRun(run, reason = run?.reason || 'manual') {
     goalMode: snapshot.goalMode ?? run.goalMode ?? calibration.label,
     goalGap: Number(snapshot.goalGap ?? run.goalGap ?? calibration.gap),
     goalGapRatio: Number(snapshot.goalGapRatio ?? run.goalGapRatio ?? calibration.gapRatio),
+    tradeCooldownUntil: Number(snapshot.tradeCooldownUntil ?? run.tradeCooldownUntil ?? 0),
+    tradeCooldownReason: snapshot.tradeCooldownReason ?? run.tradeCooldownReason ?? null,
+    tradeCooldownDetail: snapshot.tradeCooldownDetail ?? run.tradeCooldownDetail ?? null,
     totalTrades,
     wins,
     losses,
@@ -338,6 +341,9 @@ function buildRunPatch(bot, runDoc, extra = {}) {
     goalMode: snapshot?.goalMode ?? runDoc?.goalMode ?? calibration.label,
     goalGap: Number(snapshot?.goalGap ?? runDoc?.goalGap ?? calibration.gap),
     goalGapRatio: Number(snapshot?.goalGapRatio ?? runDoc?.goalGapRatio ?? calibration.gapRatio),
+    tradeCooldownUntil: snapshot?.tradeCooldownUntil ?? runDoc?.tradeCooldownUntil ?? 0,
+    tradeCooldownReason: snapshot?.tradeCooldownReason ?? runDoc?.tradeCooldownReason ?? null,
+    tradeCooldownDetail: snapshot?.tradeCooldownDetail ?? runDoc?.tradeCooldownDetail ?? null,
     updatedAt: new Date(),
     ...extra
   };
@@ -471,6 +477,9 @@ function runBalanceState(run) {
     goalMode: snapshot.goalMode ?? run.goalMode ?? calibration.label,
     goalGap: Number(snapshot.goalGap ?? run.goalGap ?? calibration.gap),
     goalGapRatio: Number(snapshot.goalGapRatio ?? run.goalGapRatio ?? calibration.gapRatio),
+    tradeCooldownUntil: Number(snapshot.tradeCooldownUntil ?? run.tradeCooldownUntil ?? 0),
+    tradeCooldownReason: snapshot.tradeCooldownReason ?? run.tradeCooldownReason ?? null,
+    tradeCooldownDetail: snapshot.tradeCooldownDetail ?? run.tradeCooldownDetail ?? null,
     confidenceGateLocked,
     confidenceGateWinRate,
     confidenceGateTriggerWinRate,
@@ -760,6 +769,9 @@ async function startFreshRun(payload = {}) {
     goalMode: initialSnapshot.goalMode,
     goalGap: initialSnapshot.goalGap,
     goalGapRatio: initialSnapshot.goalGapRatio,
+    tradeCooldownUntil: initialSnapshot.tradeCooldownUntil,
+    tradeCooldownReason: initialSnapshot.tradeCooldownReason,
+    tradeCooldownDetail: initialSnapshot.tradeCooldownDetail,
     startedAt: bot.startedAt ? bot.startedAt.toISOString() : new Date().toISOString()
   });
 

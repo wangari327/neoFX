@@ -34,6 +34,9 @@ const PHASES = {
 const DEFAULT_API_BASE_URL = 'https://api.derivws.com';
 const CONFIDENCE_GUARD_TRIGGER_WIN_RATE = 81;
 const CONFIDENCE_GUARD_RELEASE_WIN_RATE = 82;
+const CONFIDENCE_THROTTLE_MIN_TRADES = 20;
+const CONFIDENCE_THROTTLE_MIN_MS = 2500;
+const CONFIDENCE_THROTTLE_MAX_MS = 12000;
 const BLIND_SNIPER_PROFIT_CAP_FRACTION = 0.25;
 const BLIND_SNIPER_PROGRESS_TAPER_FLOOR = 0.2;
 
@@ -247,6 +250,8 @@ class DerivDigitBot extends EventEmitter {
       emittedAt: 0
     };
     this.tradeCooldownUntil = 0;
+    this.tradeCooldownReason = '';
+    this.tradeCooldownDetail = '';
   }
 
   async start() {
@@ -255,6 +260,9 @@ class DerivDigitBot extends EventEmitter {
     this.paused = false;
     this.pauseRequested = false;
     this.pauseReason = 'manual';
+    this.tradeCooldownUntil = 0;
+    this.tradeCooldownReason = '';
+    this.tradeCooldownDetail = '';
     this.emitStatus('starting');
 
     if (!this.options.token) {
@@ -297,6 +305,9 @@ class DerivDigitBot extends EventEmitter {
     this.stopped = true;
     this.paused = false;
     this.pauseRequested = false;
+    this.tradeCooldownUntil = 0;
+    this.tradeCooldownReason = '';
+    this.tradeCooldownDetail = '';
     this.currentPlan = null;
     this.tradeInFlight = false;
 
@@ -625,6 +636,54 @@ class DerivDigitBot extends EventEmitter {
       triggerWinRate: CONFIDENCE_GUARD_TRIGGER_WIN_RATE,
       releaseWinRate: CONFIDENCE_GUARD_RELEASE_WIN_RATE
     };
+  }
+
+  confidenceThrottleState(confidenceGate = this.confidenceGateState()) {
+    const activePhase = ![PHASES.MARTINGALE, PHASES.REBUILD, PHASES.STOPPED].includes(this.phase);
+    const eligible =
+      confidenceGate.locked &&
+      confidenceGate.progress > 0 &&
+      activePhase &&
+      !this.splitRecoveryArmed &&
+      this.totalTrades >= CONFIDENCE_THROTTLE_MIN_TRADES;
+
+    if (!eligible) {
+      return {
+        active: false,
+        cooldownMs: 0,
+        reason: '',
+        detail: '',
+        remainingMs: 0
+      };
+    }
+
+    const deficit = Math.max(0, confidenceGate.triggerWinRate - confidenceGate.winRate);
+    const severity = clamp(deficit, 0, 8);
+    const cooldownMs = Math.round(
+      clamp(
+        CONFIDENCE_THROTTLE_MIN_MS + severity * 700 + (confidenceGate.winRate < 80 ? 1000 : 0),
+        CONFIDENCE_THROTTLE_MIN_MS,
+        CONFIDENCE_THROTTLE_MAX_MS
+      )
+    );
+
+    return {
+      active: cooldownMs > 0,
+      cooldownMs,
+      reason: 'confidence_throttle',
+      detail: `Win rate ${confidenceGate.winRate.toFixed(1)}% is below the confidence line. Slowing new entries for about ${Math.max(1, Math.ceil(cooldownMs / 1000))} second(s).`,
+      remainingMs: Math.max(0, cooldownMs)
+    };
+  }
+
+  setTradeCooldown(durationMs, reason, detail = '') {
+    const now = Date.now();
+    const until = now + Math.max(0, Math.floor(durationMs));
+    if (until >= this.tradeCooldownUntil) {
+      this.tradeCooldownUntil = until;
+      this.tradeCooldownReason = String(reason || '');
+      this.tradeCooldownDetail = String(detail || '');
+    }
   }
 
   sessionProgressRatio() {
@@ -997,12 +1056,25 @@ class DerivDigitBot extends EventEmitter {
     }
 
     if (Date.now() < this.tradeCooldownUntil) {
+      const remainingMs = Math.max(0, this.tradeCooldownUntil - Date.now());
+      const remainingSeconds = Math.max(1, Math.ceil(remainingMs / 1000));
+      const cooldownReason = this.tradeCooldownReason === 'confidence_throttle'
+        ? this.tradeCooldownDetail || `Confidence throttle active. Waiting ${remainingSeconds} second(s) before the next entry.`
+        : this.tradeCooldownReason === 'trade_failed'
+          ? `A recent trade attempt failed. Waiting ${remainingSeconds} second(s) before trying again.`
+          : `Cooling down for ${remainingSeconds} second(s) before the next trade.`;
       this.emitAnalysis(
         'trade_cooldown',
-        'A recent trade attempt failed. Waiting briefly before trying again.',
+        cooldownReason,
         { currentDigit: tick.digit }
       );
       return;
+    }
+
+    if (this.tradeCooldownUntil > 0 && Date.now() >= this.tradeCooldownUntil) {
+      this.tradeCooldownUntil = 0;
+      this.tradeCooldownReason = '';
+      this.tradeCooldownDetail = '';
     }
 
     if (this.digits.length < this.options.windowSize) {
@@ -1048,7 +1120,7 @@ class DerivDigitBot extends EventEmitter {
     );
     this.placeTrade(condition, plan).catch((error) => {
       this.tradeInFlight = false;
-      this.tradeCooldownUntil = Date.now() + 3000;
+      this.setTradeCooldown(3000, 'trade_failed', 'A recent trade attempt failed. Waiting briefly before trying again.');
       this.emitAnalysis(
         'trade_failed',
         `Trade failed: ${error.message}. Pausing briefly, then the bot will keep analyzing.`,
@@ -1428,6 +1500,18 @@ class DerivDigitBot extends EventEmitter {
 
     this.emit('trade', tradeEvent);
     this.afterTrade(plan, result);
+
+    const confidenceGateAfter = this.confidenceGateState();
+    const throttle = this.confidenceThrottleState(confidenceGateAfter);
+    if (throttle.active && !this.stopped && this.phase === PHASES.GROWTH) {
+      this.setTradeCooldown(throttle.cooldownMs, throttle.reason, throttle.detail);
+      this.emitAnalysis(
+        'trade_cooldown',
+        throttle.detail,
+        { plan, condition: result.condition }
+      );
+    }
+
     this.emitBalance();
 
     if (this.paused && !this.stopped) {
@@ -1676,7 +1760,10 @@ class DerivDigitBot extends EventEmitter {
       splitRecoveryCapPercent: calibration.splitRecoveryCapPercent,
       goalMode: calibration.label,
       goalGap: calibration.gap,
-      goalGapRatio: calibration.gapRatio
+      goalGapRatio: calibration.gapRatio,
+      tradeCooldownUntil: this.tradeCooldownUntil,
+      tradeCooldownReason: this.tradeCooldownReason,
+      tradeCooldownDetail: this.tradeCooldownDetail
     });
   }
 
@@ -1732,6 +1819,9 @@ class DerivDigitBot extends EventEmitter {
       goalMode: calibration.label,
       goalGap: calibration.gap,
       goalGapRatio: calibration.gapRatio,
+      tradeCooldownUntil: this.tradeCooldownUntil,
+      tradeCooldownReason: this.tradeCooldownReason,
+      tradeCooldownDetail: this.tradeCooldownDetail,
       confidenceGateLocked: confidenceGate.locked,
       confidenceGateWinRate: confidenceGate.winRate,
       confidenceGateTriggerWinRate: confidenceGate.triggerWinRate,
@@ -1788,12 +1878,14 @@ class DerivDigitBot extends EventEmitter {
       goalMode: calibration.label,
       goalGap: calibration.gap,
       goalGapRatio: calibration.gapRatio,
+      tradeCooldownUntil: this.tradeCooldownUntil,
+      tradeCooldownReason: this.tradeCooldownReason,
+      tradeCooldownDetail: this.tradeCooldownDetail,
       confidenceGateLocked: this.confidenceGateLocked,
       totalTrades: this.totalTrades,
       wins: this.wins,
       losses: this.losses,
       tradeInFlight: this.tradeInFlight,
-      tradeCooldownUntil: this.tradeCooldownUntil,
       digits: this.digits.slice(-this.options.windowSize * 3),
       currentPlan: this.currentPlan ? { ...this.currentPlan } : null,
       analysisState: { ...this.analysisState }
@@ -1855,6 +1947,8 @@ class DerivDigitBot extends EventEmitter {
     this.stopped = Boolean(snapshot.stopped);
     this.tradeInFlight = false;
     this.tradeCooldownUntil = Math.max(0, Math.floor(toNumber(snapshot.tradeCooldownUntil, 0)));
+    this.tradeCooldownReason = String(snapshot.tradeCooldownReason || '');
+    this.tradeCooldownDetail = String(snapshot.tradeCooldownDetail || '');
     this.currentPlan = null;
     this.analysisState = snapshot.analysisState && typeof snapshot.analysisState === 'object'
       ? { key: String(snapshot.analysisState.key || ''), emittedAt: Number(snapshot.analysisState.emittedAt || 0) }
@@ -1921,6 +2015,9 @@ class DerivDigitBot extends EventEmitter {
       goalMode: calibration.label,
       goalGap: calibration.gap,
       goalGapRatio: calibration.gapRatio,
+      tradeCooldownUntil: this.tradeCooldownUntil,
+      tradeCooldownReason: this.tradeCooldownReason,
+      tradeCooldownDetail: this.tradeCooldownDetail,
       confidenceGateLocked: confidenceGate.locked,
       confidenceGateWinRate: confidenceGate.winRate,
       confidenceGateTriggerWinRate: confidenceGate.triggerWinRate,

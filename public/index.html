@@ -997,6 +997,7 @@
             <span id="growthFloorText">Growth floor $0.00</span>
             <span id="sniperText">Blind sniper off</span>
             <span id="confidenceText">Confidence gate off</span>
+            <span id="paceText">Trade pace normal</span>
           </div>
 
           <div class="sparkline-wrap">
@@ -1131,6 +1132,7 @@
       growthFloorText: document.getElementById('growthFloorText'),
       sniperText: document.getElementById('sniperText'),
       confidenceText: document.getElementById('confidenceText'),
+      paceText: document.getElementById('paceText'),
       progressBar: document.getElementById('progressBar'),
       progressMarker: document.getElementById('progressMarker'),
       equityValue: document.getElementById('equityValue'),
@@ -1497,6 +1499,28 @@
       const trigger = Number(event.confidenceGateTriggerWinRate || 81);
       const release = Number(event.confidenceGateReleaseWinRate || 82);
       return `Confidence gate on: ${winRate.toFixed(1)}% win rate, below ${trigger.toFixed(1)}% trigger. Hold risky jumps and snipes until ${release.toFixed(1)}%+`;
+    }
+
+    function tradePaceLabel(event) {
+      if (!event) return 'Trade pace normal';
+      const until = Number(event.tradeCooldownUntil || 0);
+      const now = Date.now();
+      if (!Number.isFinite(until) || until <= now) return 'Trade pace normal';
+      const remaining = Math.max(1, Math.ceil((until - now) / 1000));
+      const reason = String(event.tradeCooldownReason || '');
+      if (reason === 'confidence_throttle' && event.tradeCooldownDetail) {
+        return `${event.tradeCooldownDetail}`;
+      }
+      if (reason === 'trade_failed' && event.tradeCooldownDetail) {
+        return `${event.tradeCooldownDetail}`;
+      }
+      if (reason === 'confidence_throttle') {
+        return `Confidence throttle active: ${remaining}s before the next growth entry`;
+      }
+      if (reason === 'trade_failed') {
+        return `Trade cooldown: ${remaining}s after a failed attempt`;
+      }
+      return `Trade cooldown: ${remaining}s`;
     }
 
     function goalModeLabel(event) {
@@ -1896,6 +1920,9 @@
         splitRecoveryReadyAtTrade: Number(snapshot.splitRecoveryReadyAtTrade ?? run.splitRecoveryReadyAtTrade ?? 0),
         splitRecoveryPiecesRemaining: Number(snapshot.splitRecoveryPiecesRemaining ?? run.splitRecoveryPiecesRemaining ?? 0),
         splitRecoveryPieces: Number(snapshot.splitRecoveryPieces ?? run.splitRecoveryPieces ?? 2),
+        tradeCooldownUntil: Number(snapshot.tradeCooldownUntil ?? run.tradeCooldownUntil ?? 0),
+        tradeCooldownReason: snapshot.tradeCooldownReason ?? run.tradeCooldownReason ?? null,
+        tradeCooldownDetail: snapshot.tradeCooldownDetail ?? run.tradeCooldownDetail ?? null,
         confidenceGateLocked,
         confidenceGateWinRate,
         confidenceGateTriggerWinRate,
@@ -2219,8 +2246,10 @@
         seed,
         target
       });
+      const paceText = tradePaceLabel(event);
       const sniperText = sniperStatusLabel(event);
       el.goalModeText.textContent = goalModeText;
+      el.paceText.textContent = paceText;
 
       currentGrowthStairsEnabled = growthStairsEnabled;
       currentInitialStake = initialStake;
@@ -2300,6 +2329,7 @@
         confidenceGateTriggerWinRate,
         confidenceGateReleaseWinRate
       });
+      el.paceText.textContent = tradePaceLabel(event);
 
       if (source === 'trade') {
         el.lastTradeText.textContent = `${event.result} on ${event.condition} ${signedMoney(event.profit)}`;
@@ -2529,6 +2559,7 @@
       }
       el.sniperText.textContent = sniperStatusLabel(event);
       el.confidenceText.textContent = confidenceGateLabel(event);
+      el.paceText.textContent = tradePaceLabel(event);
       el.goalModeText.textContent = goalModeLabel(event);
       if (currentSessionState.activeRun) {
         currentSessionState.activeRun = {
@@ -2582,7 +2613,10 @@
         result: event.result,
         condition: event.condition,
         digit: event.digit,
-        profit: event.profit
+        profit: event.profit,
+        tradeCooldownUntil: Number(currentSessionState.activeRun?.snapshot?.tradeCooldownUntil ?? currentSessionState.activeRun?.tradeCooldownUntil ?? 0),
+        tradeCooldownReason: currentSessionState.activeRun?.snapshot?.tradeCooldownReason ?? currentSessionState.activeRun?.tradeCooldownReason ?? null,
+        tradeCooldownDetail: currentSessionState.activeRun?.snapshot?.tradeCooldownDetail ?? currentSessionState.activeRun?.tradeCooldownDetail ?? null
       }, Number(event.profit || 0), 'trade');
     });
 
