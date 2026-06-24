@@ -7,14 +7,18 @@ The bot has no paper-trading simulator. It connects to Deriv and can run against
 ## What It Implements
 
 - Node.js, `ws`, `express`, `socket.io`, no frontend framework, no TypeScript.
-- Dashboard inputs for a single Deriv authorization token, optional account ID, seed, target, demo/real mode, guide filters, and strict bar filters.
+- Dashboard inputs for a single Deriv authorization token, optional account ID, seed, target, demo/real mode, guide filters, strict bar filters, and the blind sniper toggle.
 - Demo/real mode selects which account type the bot requests from Deriv. If you pin an account ID, it must match the selected mode.
 - The dashboard shows both the live Deriv account balance and the bot's session equity, so you can tell real funds from the seed-based strategy ledger.
 - The dashboard also shows live analysis status, so you can see whether the bot is warming up, waiting for a setup, or already in a trade.
+- Pause, resume, and end-run controls are built into the dashboard so you can freeze a run without losing its state.
+- Optional MongoDB persistence keeps run summaries, trade logs, and resume snapshots across restarts and redeploys.
+- A recent-runs table lets you review prior runs and reopen their event logs from the dashboard.
 - Session balance starts at the seed you enter. The bot uses contract profit/loss to update that session balance.
 - The bot preloads recent tick history on start so it can evaluate the 20-digit window immediately instead of waiting for a fresh warmup.
 - If a trade attempt fails, the bot now pauses briefly and keeps analyzing instead of stopping outright on the first error.
 - Growth mode now uses a small stake staircase: each mini profit milestone nudges the growth stake floor upward, so long win streaks stop feeling flat.
+- Optional blind sniper overlay: after every 3 completed trades, once the run is at least 75 percent of the way from seed to target, the bot can take up to 3 blind sniper shots at one-third of session balance.
 - Volatility 100 Index symbol: `R_100`.
 - Contracts: `DIGITOVER` barrier `1`, and `DIGITUNDER` barrier `8`.
 - Last 20 digits are tracked. The bot chooses whichever condition has hit less often recently.
@@ -50,12 +54,22 @@ Martingale:
 - The recovery stake is always capped at 40 percent of the remaining session balance.
 - Win: return to Growth mode once the protected floor is regained.
 - Loss: stay in recovery until the floor is regained, or enter Rebuild mode if the balance becomes too small.
+- When a martingale recovery win clears the debt, the growth staircase resets back to its default floor before climbing again.
 
 Rebuild:
 
 - Stake `$0.35`.
 - Trade until the session balance reaches the original seed, then restart Growth mode.
 - Stop if session balance drops below 50 percent of seed while in Rebuild mode.
+
+Blind sniper overlay:
+
+- Disabled by default.
+- Ignores the extra guide filters.
+- Arms only when the run is at least 75 percent of the way from seed to target.
+- Fires after 3 completed trades, regardless of win or loss.
+- Uses one-third of session balance for the shot.
+- Stops arming after 3 sniper shots in the same run.
 
 Exit:
 
@@ -91,6 +105,8 @@ DERIV_API_TOKEN=
 DERIV_ACCOUNT_ID=
 DERIV_APP_ID=
 DERIV_API_BASE_URL=https://api.derivws.com
+MONGODB_URL=
+MONGODB_DB=deriv_digit_bot
 DEFAULT_MODE=demo
 SYMBOL=R_100
 CURRENCY=USD
@@ -105,12 +121,28 @@ GROWTH_STAKE_BUMP_PERCENT=0.15
 GROWTH_STAKE_CAP_PERCENT=0.12
 PROFIT_GATE_PERCENT=0.08
 RECOVERY_BUFFER_PERCENT=0.05
+BLIND_SNIPER_ENABLED=false
+BLIND_SNIPER_CADENCE_TRADES=3
+BLIND_SNIPER_MAX_USES=3
+BLIND_SNIPER_START_RATIO=0.75
+BLIND_SNIPER_STAKE_FRACTION=0.3333333333
 WINDOW_SIZE=20
 GUIDE_FILTERS=false
 STRICT_BAR_FILTERS=false
 ```
 
 `DERIV_API_TOKEN` is the main token the bot uses. `DERIV_APP_ID` must be the App ID from a new PAT application you registered on `developers.deriv.com`; do not reuse the old legacy `1089` App ID. `DERIV_ACCOUNT_ID` is optional and only needed if you want to pin a specific account instead of letting the bot pick the first active demo or real account that matches the selected mode.
+
+## Persistence
+
+If `MONGODB_URL` is set, the app stores each run in MongoDB:
+
+- run summaries stay available after restarts and redeploys
+- trade and phase events are saved for later review
+- paused runs can be resumed without losing the session state
+- interrupted runs are marked separately if the process died mid-trade
+
+If MongoDB is not configured, the dashboard still works, but run history stays in memory only.
 
 ## API Tokens
 
@@ -140,6 +172,7 @@ heroku login
 heroku create your-app-name
 heroku config:set DERIV_API_TOKEN=your_token_here
 heroku config:set DASHBOARD_PASSWORD=choose-a-strong-password
+heroku config:set MONGODB_URL=your_mongodb_connection_string
 heroku git:remote -a your-app-name
 git push heroku main
 ```
@@ -240,6 +273,8 @@ cp .env.example .env
 nano .env
 sudo bash scripts/install-on-vps.sh
 ```
+
+If you want run history and resume snapshots on the droplet, add `MONGODB_URL` and `MONGODB_DB` to `.env` before starting the app.
 
 That script installs Node.js 24 LTS, PM2, and UFW, opens port 3000, installs dependencies, and starts the app. The `pm2 startup` command prints one more command. Copy and run that printed command if your server asks for it.
 

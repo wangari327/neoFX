@@ -5,14 +5,15 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "check": "node --check server.js && node --check bot.js"
+    "check": "node --check server.js && node --check bot.js && node --check run-store.js"
   },
   "engines": {
-    "node": "24.x"
+    "node": ">=22"
   },
   "dependencies": {
     "dotenv": "^16.4.7",
     "express": "^4.19.2",
+    "mongodb": "^6.20.0",
     "socket.io": "^4.7.5",
     "ws": "^8.17.1"
   }

@@ -173,9 +173,28 @@
       background: var(--green);
     }
 
+    .pause {
+      background: var(--yellow);
+      color: #251d05;
+    }
+
+    .resume {
+      background: var(--cyan);
+      color: #061218;
+    }
+
     .stop {
       background: var(--red);
       color: #180808;
+    }
+
+    .ghost {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--line);
+      min-height: 34px;
+      padding: 8px 12px;
+      font-weight: 700;
     }
 
     .stats {
@@ -374,6 +393,38 @@
       display: block;
     }
 
+    .table-head,
+    .runs-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 16px 10px;
+      border-top: 1px solid var(--line);
+      background: var(--panel-2);
+    }
+
+    .table-title {
+      display: block;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0;
+      color: var(--muted);
+      margin-bottom: 2px;
+    }
+
+    .table-subtitle {
+      display: block;
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .table-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
     .banner {
       display: none;
       margin-bottom: 14px;
@@ -404,6 +455,12 @@
     .table-wrap {
       max-height: 520px;
       overflow: auto;
+    }
+
+    .table-wrap.runs {
+      max-height: 240px;
+      border-top: 1px solid var(--line);
+      background: #121414;
     }
 
     table {
@@ -508,6 +565,12 @@
       td {
         padding: 9px 10px;
       }
+
+      .table-head,
+      .runs-head {
+        align-items: flex-start;
+        flex-direction: column;
+      }
     }
   </style>
 </head>
@@ -563,8 +626,16 @@
           <input id="strictBars" type="checkbox">
         </div>
 
+        <div class="switch-row">
+          <label for="blindSniper" title="After every 3 completed trades, once the run is at least 75% to target, the bot can fire up to 3 blind sniper shots at one-third balance.">Blind sniper</label>
+          <input id="blindSniper" type="checkbox">
+        </div>
+        <div class="field-help">This one ignores the extra guide filters. It only becomes active late in the run, then waits for the 3-trade cadence before taking a shot.</div>
+
         <div class="actions">
           <button id="startBtn" class="start">START</button>
+          <button id="pauseBtn" class="pause" disabled>PAUSE</button>
+          <button id="resumeBtn" class="resume" disabled>RESUME</button>
           <button id="stopBtn" class="stop" disabled>STOP</button>
         </div>
       </aside>
@@ -604,6 +675,7 @@
             <span id="gateStepText">Gate step $0.00</span>
             <span id="growthTierText">Growth tier 0</span>
             <span id="growthFloorText">Growth floor $0.00</span>
+            <span id="sniperText">Blind sniper off</span>
           </div>
 
           <div class="sparkline-wrap">
@@ -612,6 +684,17 @@
               <span id="lastTradeText">Warming up...</span>
             </div>
             <canvas id="equityChart" class="sparkline" width="100" height="120"></canvas>
+          </div>
+        </div>
+
+        <div class="table-head">
+          <div>
+            <span class="table-title">Trade Log</span>
+            <span id="logViewLabel" class="table-subtitle">Live</span>
+          </div>
+          <div class="table-actions">
+            <span id="persistenceText" class="muted"></span>
+            <button id="liveViewBtn" class="ghost" disabled>LIVE</button>
           </div>
         </div>
 
@@ -631,6 +714,37 @@
             </thead>
             <tbody id="logBody">
               <tr><td colspan="8" class="muted">No trades yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="runs-head">
+          <div>
+            <span class="table-title">Recent Runs</span>
+            <span class="table-subtitle">Persisted history</span>
+          </div>
+          <div class="table-actions">
+            <button id="refreshRunsBtn" class="ghost">REFRESH</button>
+          </div>
+        </div>
+
+        <div class="table-wrap runs" id="runsWrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Start</th>
+                <th>End</th>
+                <th>Seed -> Target</th>
+                <th>Trades</th>
+                <th>Win/Loss</th>
+                <th>Win Rate</th>
+                <th>Net</th>
+                <th>Status</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="runsBody">
+              <tr><td colspan="9" class="muted">No saved runs yet.</td></tr>
             </tbody>
           </table>
         </div>
@@ -658,8 +772,13 @@
       mode: document.getElementById('mode'),
       guideFilters: document.getElementById('guideFilters'),
       strictBars: document.getElementById('strictBars'),
+      blindSniper: document.getElementById('blindSniper'),
       startBtn: document.getElementById('startBtn'),
       stopBtn: document.getElementById('stopBtn'),
+      pauseBtn: document.getElementById('pauseBtn'),
+      resumeBtn: document.getElementById('resumeBtn'),
+      liveViewBtn: document.getElementById('liveViewBtn'),
+      refreshRunsBtn: document.getElementById('refreshRunsBtn'),
       statusPill: document.getElementById('statusPill'),
       banner: document.getElementById('banner'),
       balance: document.getElementById('balance'),
@@ -675,6 +794,7 @@
       gateStepText: document.getElementById('gateStepText'),
       growthTierText: document.getElementById('growthTierText'),
       growthFloorText: document.getElementById('growthFloorText'),
+      sniperText: document.getElementById('sniperText'),
       progressBar: document.getElementById('progressBar'),
       progressMarker: document.getElementById('progressMarker'),
       equityValue: document.getElementById('equityValue'),
@@ -682,16 +802,29 @@
       equityChart: document.getElementById('equityChart'),
       lastTradeText: document.getElementById('lastTradeText'),
       tokenHelp: document.getElementById('tokenHelp'),
+      persistenceText: document.getElementById('persistenceText'),
+      logViewLabel: document.getElementById('logViewLabel'),
       logBody: document.getElementById('logBody'),
-      tableWrap: document.getElementById('tableWrap')
+      tableWrap: document.getElementById('tableWrap'),
+      runsBody: document.getElementById('runsBody')
     };
 
-    let logStarted = false;
+    let liveRows = [];
+    let viewRows = [];
+    let currentView = 'live';
     let currentSeed = Number(el.seed.value);
     let currentTarget = Number(el.target.value);
     let currentWindowSize = 20;
     let currentMinStake = 0.35;
     let currentProfitGatePercent = 0.08;
+    let currentBlindSniperCadenceTrades = 3;
+    let currentBlindSniperMaxUses = 3;
+    let currentBlindSniperStartRatio = 0.75;
+    let currentBlindSniperStakeFraction = 1 / 3;
+    let currentRunStatus = 'idle';
+    let currentActiveRunId = null;
+    let currentResumeRunId = null;
+    let currentPersistenceBackend = 'memory';
     let lastKnownAccountBalance = null;
     let equityHistory = [currentSeed];
     let lastSeriesBalance = currentSeed;
@@ -728,10 +861,62 @@
       el.banner.textContent = '';
     }
 
-    function setRunning(running) {
-      el.startBtn.disabled = running;
-      el.stopBtn.disabled = !running;
-      el.statusPill.textContent = running ? 'Running' : 'Idle';
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>"']/g, (character) => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+      })[character]);
+    }
+
+    function formatTime(value) {
+      if (!value) return '—';
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? '—' : date.toLocaleTimeString();
+    }
+
+    function shortId(value) {
+      const text = String(value || '');
+      return text.length > 8 ? text.slice(-8) : text;
+    }
+
+    function statusLabel(value) {
+      const text = String(value || 'idle').replace(/_/g, ' ');
+      return text.charAt(0).toUpperCase() + text.slice(1);
+    }
+
+    function sniperStatusLabel(event) {
+      if (!event || !event.blindSniperEnabled) return 'Blind sniper off';
+
+      const maxUses = Number(event.blindSniperMaxUses || 3);
+      const usesRemaining = Number(event.blindSniperUsesRemaining ?? maxUses);
+      const tradesUntilShot = Number(event.blindSniperTradesUntilShot ?? 0);
+      const progressPct = Math.round(Number(event.blindSniperProgress ?? 0) * 100);
+      const reason = String(event.blindSniperReason || '');
+      const startPct = Math.round(Number(event.blindSniperStartRatio || 0.75) * 100);
+
+      if (usesRemaining <= 0) return 'Blind sniper quota used';
+      if (event.blindSniperArmed) return `Blind sniper armed (${usesRemaining}/${maxUses} uses left)`;
+      if (reason === 'progress_wait') return `Blind sniper waiting for ${startPct}%+`;
+      if (reason === 'cadence_wait') return `Blind sniper ready, ${tradesUntilShot} trade(s) away`;
+      if (reason === 'phase_blocked') return 'Blind sniper waiting for an offensive phase';
+      if (reason === 'disabled') return 'Blind sniper off';
+      return `Blind sniper ${progressPct}% to target`;
+    }
+
+    function setControlState(status) {
+      currentRunStatus = String(status || 'idle');
+      const normalized = currentRunStatus.toLowerCase();
+      const runningLike = normalized === 'starting' || normalized === 'running';
+      const pausedLike = normalized === 'paused';
+
+      el.startBtn.disabled = runningLike || pausedLike;
+      el.pauseBtn.disabled = normalized !== 'running';
+      el.resumeBtn.disabled = !pausedLike;
+      el.stopBtn.disabled = !(runningLike || pausedLike);
+      el.statusPill.textContent = statusLabel(normalized === 'ended' ? 'idle' : currentRunStatus);
     }
 
     function updateAnalysis(event) {
@@ -765,21 +950,365 @@
         color = 'var(--red)';
       } else if (stage === 'trade_in_flight') {
         color = 'var(--cyan)';
+      } else if (stage === 'blind_sniper_waiting') {
+        color = 'var(--yellow)';
       }
 
       el.lastTradeText.textContent = text;
       el.lastTradeText.style.color = color;
     }
 
-    function resetLog() {
-      logStarted = false;
-      el.logBody.innerHTML = '<tr><td colspan="8" class="muted">No trades yet.</td></tr>';
+    function renderLogRows(rows, emptyText = 'No trades yet.') {
+      const htmlRows = Array.isArray(rows) ? rows : [];
+      if (!htmlRows.length) {
+        el.logBody.innerHTML = `<tr><td colspan="8" class="muted">${escapeHtml(emptyText)}</td></tr>`;
+        return;
+      }
+      el.logBody.innerHTML = htmlRows.join('');
+      el.tableWrap.scrollTop = el.tableWrap.scrollHeight;
     }
 
-    function ensureLogStarted() {
-      if (logStarted) return;
-      el.logBody.innerHTML = '';
-      logStarted = true;
+    function setLogView(mode, label, emptyText = 'No trades yet.') {
+      currentView = String(mode || 'live');
+      el.logViewLabel.textContent = label || (currentView === 'live' ? 'Live' : currentView);
+      el.liveViewBtn.disabled = currentView === 'live';
+      renderLogRows(currentView === 'live' ? liveRows : viewRows, emptyText);
+    }
+
+    function showLiveView() {
+      viewRows = [];
+      setLogView('live', 'Live', 'No trades yet.');
+    }
+
+    function makeRowHtml(cells, className) {
+      return `<tr class="${escapeHtml(className || '')}">` +
+        cells.map((cell) => `<td>${escapeHtml(cell)}</td>`).join('') +
+        '</tr>';
+    }
+
+    function tradePhaseLabel(event) {
+      return event.plan && event.plan !== event.phase
+        ? `${phaseName(event.phase)} / ${phaseName(event.plan)}`
+        : phaseName(event.phase);
+    }
+
+    function tradeRowHtml(event, timeValue) {
+      return makeRowHtml([
+        formatTime(timeValue || event.time),
+        event.digit ?? '—',
+        event.condition || '—',
+        money(event.stake),
+        signedMoney(event.profit),
+        event.result || '—',
+        money(event.balance),
+        tradePhaseLabel(event)
+      ], event.result === 'Win' ? 'win' : 'loss');
+    }
+
+    function phaseRowHtml(event, timeValue) {
+      return makeRowHtml([
+        formatTime(timeValue || event.time),
+        '—',
+        'Phase',
+        '—',
+        '—',
+        event.reason || '—',
+        money(event.balance),
+        `${phaseName(event.from)} -> ${phaseName(event.to)}`
+      ], 'phase');
+    }
+
+    function statusRowHtml(event, timeValue) {
+      return makeRowHtml([
+        formatTime(timeValue || event.time),
+        '—',
+        'Status',
+        '—',
+        '—',
+        statusLabel(event.status),
+        money(event.balance || 0),
+        phaseName(event.phase || currentRunStatus)
+      ], 'phase');
+    }
+
+    function errorRowHtml(event, timeValue) {
+      return makeRowHtml([
+        formatTime(timeValue || event.time),
+        '—',
+        'Error',
+        '—',
+        '—',
+        event.message || '—',
+        '—',
+        '—'
+      ], 'loss');
+    }
+
+    function botStoppedRowHtml(summary) {
+      return makeRowHtml([
+        formatTime(summary.stoppedAt || new Date().toISOString()),
+        '—',
+        'Stop',
+        '—',
+        '—',
+        summary.reason || 'manual',
+        money(summary.finalBalance),
+        phaseName(summary.reason || 'ended')
+      ], summary.reason === 'take_profit' ? 'win' : summary.reason === 'stop_loss' ? 'loss' : 'phase');
+    }
+
+    function recordToRowHtml(record) {
+      const type = String(record && record.type ? record.type : '').toLowerCase();
+      const payload = record && record.payload ? record.payload : {};
+      const timeValue = record && (record.time || record.createdAt);
+
+      if (type === 'trade') return tradeRowHtml(payload, timeValue);
+      if (type === 'phase_change') return phaseRowHtml(payload, timeValue);
+      if (type === 'status') return statusRowHtml(payload, timeValue);
+      if (type === 'error') return errorRowHtml(payload, timeValue);
+      if (type === 'bot_stopped') return botStoppedRowHtml(payload, timeValue);
+      return null;
+    }
+
+    function appendLiveRowHtml(html) {
+      if (!html) return;
+      liveRows.push(html);
+      if (liveRows.length > 500) liveRows.shift();
+      if (currentView === 'live') {
+        renderLogRows(liveRows, 'No trades yet.');
+      }
+    }
+
+    function appendAndUpdate(event, type) {
+      const html = type === 'trade'
+        ? tradeRowHtml(event)
+        : type === 'phase_change'
+          ? phaseRowHtml(event)
+          : type === 'status'
+            ? statusRowHtml(event)
+            : type === 'error'
+              ? errorRowHtml(event)
+              : type === 'bot_stopped'
+                ? botStoppedRowHtml(event)
+                : null;
+      appendLiveRowHtml(html);
+    }
+
+    function normalizeSocketRun(run) {
+      if (!run) return null;
+      return {
+        ...run,
+        id: run.id || run._id || null
+      };
+    }
+
+    function renderRecentRuns(runs) {
+      const list = Array.isArray(runs) ? runs : [];
+      el.runsBody.innerHTML = '';
+
+      if (!list.length) {
+        el.runsBody.innerHTML = '<tr><td colspan="9" class="muted">No saved runs yet.</td></tr>';
+        return;
+      }
+
+      list.forEach((run) => {
+        const snapshot = run.snapshot || {};
+        const summary = run.summary || {};
+        const totalTrades = Number(snapshot.totalTrades ?? run.totalTrades ?? summary.totalTrades ?? 0);
+        const wins = Number(snapshot.wins ?? run.wins ?? summary.wins ?? 0);
+        const losses = Number(snapshot.losses ?? run.losses ?? summary.losses ?? 0);
+        const winRate = Number.isFinite(Number(run.winRate))
+          ? Number(run.winRate)
+          : Number.isFinite(Number(summary.winRate))
+            ? Number(summary.winRate)
+            : totalTrades
+              ? (wins / totalTrades) * 100
+              : 0;
+        const netProfit = Number.isFinite(Number(summary.netProfit))
+          ? Number(summary.netProfit)
+          : Number.isFinite(Number(run.netProfit))
+            ? Number(run.netProfit)
+            : Number(snapshot.balance ?? run.balance ?? 0) - Number(run.seed ?? currentSeed);
+        const startedAt = run.startedAt || summary.startedAt || snapshot.startedAt;
+        const endedAt = run.endedAt || run.pausedAt || summary.stoppedAt || run.updatedAt;
+        const row = document.createElement('tr');
+        row.className = netProfit > 0 ? 'win' : netProfit < 0 ? 'loss' : 'phase';
+        row.innerHTML = [
+          `<td>${escapeHtml(formatTime(startedAt))}</td>`,
+          `<td>${escapeHtml(formatTime(endedAt))}</td>`,
+          `<td>${escapeHtml(`${money(run.seed ?? currentSeed)} -> ${money(run.target ?? currentTarget)}`)}</td>`,
+          `<td>${escapeHtml(totalTrades)}</td>`,
+          `<td>${escapeHtml(`${wins}/${losses}`)}</td>`,
+          `<td>${escapeHtml(`${Number(winRate || 0).toFixed(1)}%`)}</td>`,
+          `<td>${escapeHtml(signedMoney(netProfit))}</td>`,
+          `<td>${escapeHtml(statusLabel(run.status))}</td>`,
+          `<td><button class="ghost" type="button">VIEW</button></td>`
+        ].join('');
+
+        row.querySelector('button').addEventListener('click', () => {
+          void loadRunHistory(run.id, `${statusLabel(run.status)} ${shortId(run.id)}`);
+        });
+        el.runsBody.appendChild(row);
+      });
+    }
+
+    function syncControlsAndRun(run) {
+      if (!run) return;
+      const snapshot = run.snapshot || {};
+      const balance = Number(snapshot.balance ?? run.balance ?? run.seed ?? currentSeed);
+      const accountBalance = Number.isFinite(Number(snapshot.accountBalance ?? run.accountBalance))
+        ? Number(snapshot.accountBalance ?? run.accountBalance)
+        : null;
+      const seed = Number(run.seed ?? currentSeed);
+      const target = Number(run.target ?? currentTarget);
+      const totalTrades = Number(snapshot.totalTrades ?? run.totalTrades ?? 0);
+      const wins = Number(snapshot.wins ?? run.wins ?? 0);
+      const losses = Number(snapshot.losses ?? run.losses ?? 0);
+      const config = run.config || {};
+      const phase = String(snapshot.phase || run.phase || 'growth');
+      const blindSniperEnabled = Boolean(snapshot.blindSniperEnabled ?? run.blindSniperEnabled ?? config.blindSniperEnabled ?? false);
+      const blindSniperUses = Number(snapshot.blindSniperUses ?? run.blindSniperUses ?? config.blindSniperUses ?? 0);
+      const blindSniperCadenceTrades = Number(snapshot.blindSniperCadenceTrades ?? run.blindSniperCadenceTrades ?? config.blindSniperCadenceTrades ?? 3);
+      const blindSniperMaxUses = Number(snapshot.blindSniperMaxUses ?? run.blindSniperMaxUses ?? config.blindSniperMaxUses ?? 3);
+      const blindSniperStartRatio = Number(snapshot.blindSniperStartRatio ?? run.blindSniperStartRatio ?? config.blindSniperStartRatio ?? 0.75);
+      const blindSniperStakeFraction = Number(snapshot.blindSniperStakeFraction ?? run.blindSniperStakeFraction ?? config.blindSniperStakeFraction ?? 1 / 3);
+      const blindSniperTradesSinceLastShot = Number(snapshot.blindSniperTradesSinceLastShot ?? run.blindSniperTradesSinceLastShot ?? config.blindSniperTradesSinceLastShot ?? 0);
+      const blindSniperProgress = Math.max(0, Math.min(1, (balance - seed) / Math.max(0.01, target - seed)));
+      const blindSniperUsesRemaining = Math.max(0, blindSniperMaxUses - blindSniperUses);
+      const blindSniperTradesUntilShot = Math.max(0, blindSniperCadenceTrades - blindSniperTradesSinceLastShot);
+      const blindSniperArmed =
+        blindSniperEnabled &&
+        !['martingale', 'rebuild', 'stopped'].includes(phase) &&
+        blindSniperUsesRemaining > 0 &&
+        blindSniperProgress >= blindSniperStartRatio &&
+        blindSniperTradesSinceLastShot >= blindSniperCadenceTrades;
+      const blindSniperReason = !blindSniperEnabled
+        ? 'disabled'
+        : blindSniperUsesRemaining <= 0
+          ? 'quota_exhausted'
+          : ['martingale', 'rebuild', 'stopped'].includes(phase)
+            ? 'phase_blocked'
+            : blindSniperProgress < blindSniperStartRatio
+              ? 'progress_wait'
+              : blindSniperTradesSinceLastShot < blindSniperCadenceTrades
+                ? 'cadence_wait'
+                : 'armed';
+
+      currentBlindSniperCadenceTrades = blindSniperCadenceTrades;
+      currentBlindSniperMaxUses = blindSniperMaxUses;
+      currentBlindSniperStartRatio = blindSniperStartRatio;
+      currentBlindSniperStakeFraction = blindSniperStakeFraction;
+
+      currentSeed = seed;
+      currentTarget = target;
+      el.seed.value = seed;
+      el.target.value = target;
+      if (run.mode) el.mode.value = run.mode;
+      if (run.accountId) el.accountId.value = run.accountId;
+
+      resetEquityTrail();
+      updateStats({
+        balance,
+        accountBalance,
+        phase: snapshot.phase || run.phase || 'growth',
+        seed,
+        target,
+        totalTrades,
+        wins,
+        losses,
+        winRate: Number.isFinite(Number(run.winRate))
+          ? Number(run.winRate)
+          : totalTrades
+            ? (wins / totalTrades) * 100
+            : 0,
+        riskFloor: Number(snapshot.riskFloor ?? run.riskFloor ?? seed),
+        recoveryDebt: Number(snapshot.recoveryDebt ?? run.recoveryDebt ?? 0),
+        growthTier: Number(snapshot.growthTier ?? run.growthTier ?? 0),
+        growthStep: Number(snapshot.growthStep ?? run.growthStep ?? 0),
+        growthFloor: Number(snapshot.growthFloor ?? run.growthFloor ?? currentMinStake),
+        gateStep: Number(snapshot.gateStep ?? run.gateStep ?? Math.max(currentMinStake * 2, seed * currentProfitGatePercent)),
+        blindSniperEnabled,
+        blindSniperUses,
+        blindSniperUsesRemaining,
+        blindSniperTradesSinceLastShot,
+        blindSniperTradesUntilShot,
+        blindSniperCadenceTrades,
+        blindSniperMaxUses,
+        blindSniperStartRatio,
+        blindSniperStakeFraction,
+        blindSniperProgress,
+        blindSniperArmed,
+        blindSniperReason
+      }, null, 'balance');
+      currentActiveRunId = run.id || null;
+      currentResumeRunId = run.status === 'paused' ? run.id || null : null;
+      setControlState(run.status || 'idle');
+    }
+
+    function refreshInputsFromRun(run) {
+      if (!run) return;
+      if (run.seed !== undefined) el.seed.value = run.seed;
+      if (run.target !== undefined) el.target.value = run.target;
+      if (run.mode) el.mode.value = run.mode;
+      if (run.accountId) el.accountId.value = run.accountId;
+      if (run.config && run.config.blindSniperEnabled !== undefined) {
+        el.blindSniper.checked = Boolean(run.config.blindSniperEnabled);
+      } else if (run.blindSniperEnabled !== undefined) {
+        el.blindSniper.checked = Boolean(run.blindSniperEnabled);
+      }
+    }
+
+    function refreshRuns() {
+      return new Promise((resolve) => {
+        socket.emit('refresh_runs', {}, (response) => {
+          if (!response || !response.ok) {
+            showBanner('danger', response && response.error ? response.error : 'Failed to refresh runs');
+            resolve(false);
+            return;
+          }
+
+          const state = response.state || {};
+          currentPersistenceBackend = state.persistenceBackend || currentPersistenceBackend;
+          el.persistenceText.textContent = currentPersistenceBackend === 'mongo' ? 'Mongo history' : 'Memory history';
+          renderRecentRuns(state.recentRuns || []);
+          if (state.activeRun) {
+            refreshInputsFromRun(normalizeSocketRun(state.activeRun));
+            syncControlsAndRun(normalizeSocketRun(state.activeRun));
+          } else if (state.resumeRun) {
+            refreshInputsFromRun(normalizeSocketRun(state.resumeRun));
+            syncControlsAndRun(normalizeSocketRun(state.resumeRun));
+            setControlState('paused');
+          } else {
+            setControlState('idle');
+          }
+          resolve(true);
+        });
+      });
+    }
+
+    async function loadRunHistory(runId, label) {
+      if (!runId) return;
+      try {
+        const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/events?limit=300`);
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload && payload.error ? payload.error : `Failed to load run ${runId}.`);
+        }
+
+        viewRows = (payload.events || [])
+          .map(recordToRowHtml)
+          .filter(Boolean);
+        setLogView(runId, label || `Run ${shortId(runId)}`, 'No saved events.');
+        renderLogRows(viewRows, 'No saved events.');
+      } catch (error) {
+        showBanner('danger', error.message || 'Unable to load saved run history.');
+      }
+    }
+
+    function resetLog() {
+      liveRows = [];
+      viewRows = [];
+      showLiveView();
     }
 
     function resetEquityTrail() {
@@ -806,6 +1335,7 @@
       el.gateStepText.textContent = `Gate step ${money(Math.max(currentMinStake * 2, currentSeed * currentProfitGatePercent))}`;
       el.growthTierText.textContent = 'Growth tier 0';
       el.growthFloorText.textContent = `Growth floor ${money(currentMinStake)}`;
+      el.sniperText.textContent = 'Blind sniper off';
       el.progressMarker.title = `Session equity ${money(currentSeed)}`;
       el.lastTradeText.textContent = 'Warming up...';
       el.lastTradeText.style.color = 'var(--muted)';
@@ -958,6 +1488,20 @@
       const gateStep = Number(event.gateStep || 0);
       const growthTier = Number(event.growthTier || 0);
       const growthFloor = Number(event.growthFloor || currentMinStake);
+      const sniperText = sniperStatusLabel(event);
+
+      if (Number.isFinite(Number(event.blindSniperCadenceTrades))) {
+        currentBlindSniperCadenceTrades = Number(event.blindSniperCadenceTrades);
+      }
+      if (Number.isFinite(Number(event.blindSniperMaxUses))) {
+        currentBlindSniperMaxUses = Number(event.blindSniperMaxUses);
+      }
+      if (Number.isFinite(Number(event.blindSniperStartRatio))) {
+        currentBlindSniperStartRatio = Number(event.blindSniperStartRatio);
+      }
+      if (Number.isFinite(Number(event.blindSniperStakeFraction))) {
+        currentBlindSniperStakeFraction = Number(event.blindSniperStakeFraction);
+      }
 
       const profitLoss = balance - seed;
       const delta = Number.isFinite(tradeDelta)
@@ -989,6 +1533,8 @@
         el.growthFloorText.textContent = `Growth floor ${money(growthFloor)}`;
       }
 
+      el.sniperText.textContent = sniperText;
+
       if (source === 'trade') {
         el.lastTradeText.textContent = `${event.result} on ${event.condition} ${signedMoney(event.profit)}`;
         el.lastTradeText.style.color = event.profit >= 0 ? 'var(--green)' : 'var(--red)';
@@ -1001,30 +1547,11 @@
       lastRenderedTrades = Number(event.totalTrades || lastRenderedTrades);
     }
 
-    function addRow(cells, className) {
-      ensureLogStarted();
-      const row = document.createElement('tr');
-      row.className = className || '';
-      row.innerHTML = cells.map((cell) => `<td>${cell}</td>`).join('');
-      el.logBody.appendChild(row);
-      el.tableWrap.scrollTop = el.tableWrap.scrollHeight;
-    }
-
-    function updateProgress(balance, seed, target) {
-      currentSeed = Number(seed || currentSeed);
-      currentTarget = Number(target || currentTarget);
-      const span = Math.max(0.01, currentTarget - currentSeed);
-      const pct = Math.max(0, Math.min(100, ((balance - currentSeed) / span) * 100));
-      el.progressStart.textContent = money(currentSeed);
-      el.progressTarget.textContent = money(currentTarget);
-      el.progressText.textContent = `${pct.toFixed(1)}%`;
-      el.progressBar.style.width = `${pct}%`;
-      el.progressBar.style.background = balance >= currentSeed ? 'var(--cyan)' : 'var(--red)';
-    }
-
     el.startBtn.addEventListener('click', () => {
       clearBanner();
-      resetLog();
+      showLiveView();
+      liveRows = [];
+      viewRows = [];
       currentSeed = Number(el.seed.value);
       currentTarget = Number(el.target.value);
       resetEquityTrail();
@@ -1034,7 +1561,19 @@
         target: currentTarget,
         phase: 'growth',
         totalTrades: 0,
-        winRate: 0
+        winRate: 0,
+        blindSniperEnabled: el.blindSniper.checked,
+        blindSniperUses: 0,
+        blindSniperUsesRemaining: currentBlindSniperMaxUses,
+        blindSniperTradesSinceLastShot: 0,
+        blindSniperTradesUntilShot: currentBlindSniperCadenceTrades,
+        blindSniperCadenceTrades: currentBlindSniperCadenceTrades,
+        blindSniperMaxUses: currentBlindSniperMaxUses,
+        blindSniperStartRatio: currentBlindSniperStartRatio,
+        blindSniperStakeFraction: currentBlindSniperStakeFraction,
+        blindSniperProgress: 0,
+        blindSniperArmed: false,
+        blindSniperReason: el.blindSniper.checked ? 'progress_wait' : 'disabled'
       }, 0, 'balance');
 
       socket.emit('start_bot', {
@@ -1044,13 +1583,33 @@
         target: currentTarget,
         mode: el.mode.value,
         guideFilters: el.guideFilters.checked,
-        strictBarFilters: el.strictBars.checked
+        strictBarFilters: el.strictBars.checked,
+        blindSniperEnabled: el.blindSniper.checked
       }, (response) => {
         if (!response || !response.ok) {
           showBanner('danger', response && response.error ? response.error : 'Start failed');
-          setRunning(false);
+          setControlState('idle');
         } else {
-          setRunning(true);
+          setControlState('starting');
+        }
+      });
+    });
+
+    el.pauseBtn.addEventListener('click', () => {
+      socket.emit('pause_bot', {}, (response) => {
+        if (!response || !response.ok) {
+          showBanner('danger', response && response.error ? response.error : 'Pause failed');
+        }
+      });
+    });
+
+    el.resumeBtn.addEventListener('click', () => {
+      socket.emit('resume_bot', {
+        token: el.token.value,
+        accountId: el.accountId.value
+      }, (response) => {
+        if (!response || !response.ok) {
+          showBanner('danger', response && response.error ? response.error : 'Resume failed');
         }
       });
     });
@@ -1061,6 +1620,14 @@
           showBanner('danger', response && response.error ? response.error : 'Stop failed');
         }
       });
+    });
+
+    el.liveViewBtn.addEventListener('click', () => {
+      showLiveView();
+    });
+
+    el.refreshRunsBtn.addEventListener('click', () => {
+      void refreshRuns();
     });
 
     socket.on('config', (config) => {
@@ -1074,14 +1641,50 @@
       if (Number.isFinite(Number(config.profitGatePercent))) {
         currentProfitGatePercent = Number(config.profitGatePercent);
       }
+      if (Number.isFinite(Number(config.blindSniperCadenceTrades))) {
+        currentBlindSniperCadenceTrades = Number(config.blindSniperCadenceTrades);
+      }
+      if (Number.isFinite(Number(config.blindSniperMaxUses))) {
+        currentBlindSniperMaxUses = Number(config.blindSniperMaxUses);
+      }
+      if (Number.isFinite(Number(config.blindSniperStartRatio))) {
+        currentBlindSniperStartRatio = Number(config.blindSniperStartRatio);
+      }
+      if (Number.isFinite(Number(config.blindSniperStakeFraction))) {
+        currentBlindSniperStakeFraction = Number(config.blindSniperStakeFraction);
+      }
+      currentPersistenceBackend = config.persistenceBackend || currentPersistenceBackend;
+      el.persistenceText.textContent = currentPersistenceBackend === 'mongo' ? 'Mongo history' : 'Memory history';
       el.guideFilters.checked = Boolean(config.guideFilters);
       el.strictBars.checked = Boolean(config.strictBarFilters);
+      el.blindSniper.checked = Boolean(config.blindSniperEnabled);
       el.gateStepText.textContent = `Gate step ${money(Math.max(currentMinStake * 2, currentSeed * currentProfitGatePercent))}`;
       el.growthFloorText.textContent = `Growth floor ${money(currentMinStake)}`;
       if (config.hasEnvToken) {
         el.tokenHelp.innerHTML = 'A Deriv authorization token is loaded from <code>.env</code>. Use the mode switch to choose the account type, and fill <em>Account ID</em> only if you want to pin a specific account.';
       } else {
         el.tokenHelp.innerHTML = 'Store one Deriv authorization token in <code>.env</code> or paste one here for a single run.';
+      }
+    });
+
+    socket.on('session_state', (state) => {
+      currentPersistenceBackend = state.persistenceBackend || currentPersistenceBackend;
+      el.persistenceText.textContent = currentPersistenceBackend === 'mongo' ? 'Mongo history' : 'Memory history';
+      renderRecentRuns(state.recentRuns || []);
+      if (state.activeRun) {
+        refreshInputsFromRun(normalizeSocketRun(state.activeRun));
+        syncControlsAndRun(normalizeSocketRun(state.activeRun));
+      } else if (state.resumeRun) {
+        refreshInputsFromRun(normalizeSocketRun(state.resumeRun));
+        syncControlsAndRun(normalizeSocketRun(state.resumeRun));
+        setControlState('paused');
+      } else {
+        setControlState('idle');
+      }
+      currentActiveRunId = state.activeRun ? state.activeRun.id : null;
+      currentResumeRunId = state.resumeRun ? state.resumeRun.id : null;
+      if (state.bootError) {
+        showBanner('warn', `Persistence notice: ${state.bootError}`);
       }
     });
 
@@ -1094,8 +1697,15 @@
     });
 
     socket.on('status', (event) => {
-      el.statusPill.textContent = event.status || 'Running';
-      if (event.status === 'running') setRunning(true);
+      appendAndUpdate(event, 'status');
+      if (event.status) {
+        setControlState(event.status);
+      }
+      if (event.status === 'paused') {
+        showBanner('warn', event.pauseReason ? `Run paused (${event.pauseReason}).` : 'Run paused.');
+      } else if (event.status === 'running' || event.status === 'starting') {
+        clearBanner();
+      }
     });
 
     socket.on('connect', () => {
@@ -1113,17 +1723,7 @@
     });
 
     socket.on('trade', (event) => {
-      const time = new Date(event.time).toLocaleTimeString();
-      addRow([
-        time,
-        event.digit,
-        event.condition,
-        money(event.stake),
-        signedMoney(event.profit),
-        event.result,
-        money(event.balance),
-        phaseName(event.phase)
-      ], event.result === 'Win' ? 'win' : 'loss');
+      appendAndUpdate(event, 'trade');
       updateStats({
         balance: event.balance,
         seed: currentSeed,
@@ -1139,25 +1739,16 @@
     });
 
     socket.on('phase_change', (event) => {
-      const time = new Date(event.time).toLocaleTimeString();
-      addRow([
-        time,
-        '-',
-        'Phase',
-        '-',
-        '-',
-        event.reason || '-',
-        money(event.balance),
-        `${phaseName(event.from)} -> ${phaseName(event.to)}`
-      ], 'phase');
+      appendAndUpdate(event, 'phase_change');
     });
 
     socket.on('bot_error', (event) => {
+      appendAndUpdate(event, 'error');
       const message = event.message || 'Bot error';
       const retryable = message.startsWith('Trade failed:');
       showBanner(retryable ? 'warn' : 'danger', message);
       if (!retryable) {
-        setRunning(false);
+        setControlState('idle');
       }
     });
 
@@ -1166,17 +1757,23 @@
     });
 
     socket.on('bot_stopped', (summary) => {
-      setRunning(false);
+      appendAndUpdate(summary, 'bot_stopped');
+      setControlState('idle');
       const text = `Stopped: ${summary.reason}. Trades ${summary.totalTrades}, win rate ${summary.winRate}%, net ${money(summary.netProfit)}.`;
       if (summary.reason === 'take_profit') showBanner('success', text);
       else if (summary.reason === 'stop_loss') showBanner('danger', text);
       else showBanner('warn', text);
+      currentActiveRunId = null;
+      currentResumeRunId = null;
     });
 
     socket.on('connect_error', (error) => {
       showBanner('danger', error.message || 'Socket connection failed');
     });
 
+    showLiveView();
+    setControlState('idle');
+    void refreshRuns();
     resetEquityTrail();
   </script>
 </body>

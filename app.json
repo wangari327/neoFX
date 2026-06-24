@@ -41,6 +41,15 @@
       "value": "https://api.derivws.com",
       "required": false
     },
+    "MONGODB_URL": {
+      "description": "MongoDB connection string used to persist runs, logs, and resume snapshots.",
+      "required": false
+    },
+    "MONGODB_DB": {
+      "description": "MongoDB database name for this app.",
+      "value": "deriv_digit_bot",
+      "required": false
+    },
     "DASHBOARD_USER": {
       "description": "Basic-auth username for the dashboard.",
       "value": "admin",
@@ -103,6 +112,31 @@
     "RECOVERY_BUFFER_PERCENT": {
       "description": "Extra profit margin added to recovery stakes so they can reclaim the protected floor faster.",
       "value": "0.05",
+      "required": false
+    },
+    "BLIND_SNIPER_ENABLED": {
+      "description": "Enable the blind sniper overlay on top of the normal growth/risky/martingale loop.",
+      "value": "false",
+      "required": false
+    },
+    "BLIND_SNIPER_CADENCE_TRADES": {
+      "description": "How many completed trades must pass before the next blind sniper shot can arm.",
+      "value": "3",
+      "required": false
+    },
+    "BLIND_SNIPER_MAX_USES": {
+      "description": "Maximum blind sniper shots allowed in a single seed-to-target run.",
+      "value": "3",
+      "required": false
+    },
+    "BLIND_SNIPER_START_RATIO": {
+      "description": "Session progress ratio needed before blind sniper can arm.",
+      "value": "0.75",
+      "required": false
+    },
+    "BLIND_SNIPER_STAKE_FRACTION": {
+      "description": "Fraction of the current session balance used for each blind sniper shot.",
+      "value": "0.3333333333",
       "required": false
     },
     "WINDOW_SIZE": {

@@ -5,6 +5,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const { DerivDigitBot, roundMoney } = require('./bot');
+const { createRunStore } = require('./run-store');
 
 const app = express();
 const server = http.createServer(app);
@@ -14,9 +15,17 @@ const io = new Server(server, {
 
 const PORT = Number(process.env.PORT || 3000);
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const RUN_HISTORY_LIMIT = 12;
 
+let runStore = createRunStore({
+  mongoUrl: process.env.MONGODB_URL || process.env.MONGO_URL || '',
+  dbName: process.env.MONGODB_DB || process.env.MONGO_DB || 'deriv_digit_bot'
+});
+let persistenceBackend = process.env.MONGODB_URL || process.env.MONGO_URL ? 'mongo' : 'memory';
 let activeBot = null;
-let lastSnapshot = null;
+let activeRun = null;
+let recentRunsCache = [];
+let bootError = null;
 
 function boolFrom(value, fallback = false) {
   if (value === undefined || value === null || value === '') return fallback;
@@ -64,11 +73,17 @@ function publicConfig() {
     growthStakeCapPercent: numberFrom(process.env.GROWTH_STAKE_CAP_PERCENT, 0.12),
     profitGatePercent: numberFrom(process.env.PROFIT_GATE_PERCENT, 0.08),
     recoveryBufferPercent: numberFrom(process.env.RECOVERY_BUFFER_PERCENT, 0.05),
+    blindSniperEnabled: boolFrom(process.env.BLIND_SNIPER_ENABLED, false),
+    blindSniperCadenceTrades: numberFrom(process.env.BLIND_SNIPER_CADENCE_TRADES, 3),
+    blindSniperMaxUses: numberFrom(process.env.BLIND_SNIPER_MAX_USES, 3),
+    blindSniperStartRatio: numberFrom(process.env.BLIND_SNIPER_START_RATIO, 0.75),
+    blindSniperStakeFraction: numberFrom(process.env.BLIND_SNIPER_STAKE_FRACTION, 1 / 3),
     hasEnvToken: Boolean(
       process.env.DERIV_API_TOKEN ||
       process.env.DERIV_DEMO_API_TOKEN ||
       process.env.DERIV_REAL_API_TOKEN
-    )
+    ),
+    persistenceBackend
   };
 }
 
@@ -122,30 +137,571 @@ function sanitizeStartPayload(payload = {}) {
     recoveryBufferPercent: numberFrom(process.env.RECOVERY_BUFFER_PERCENT, 0.05),
     windowSize: numberFrom(process.env.WINDOW_SIZE, 20),
     guideFilters: boolFrom(payload.guideFilters, boolFrom(process.env.GUIDE_FILTERS, false)),
-    strictBarFilters: boolFrom(payload.strictBarFilters, boolFrom(process.env.STRICT_BAR_FILTERS, false))
+    strictBarFilters: boolFrom(payload.strictBarFilters, boolFrom(process.env.STRICT_BAR_FILTERS, false)),
+    blindSniperEnabled: boolFrom(payload.blindSniperEnabled, boolFrom(process.env.BLIND_SNIPER_ENABLED, false)),
+    blindSniperCadenceTrades: numberFrom(payload.blindSniperCadenceTrades, numberFrom(process.env.BLIND_SNIPER_CADENCE_TRADES, 3)),
+    blindSniperMaxUses: numberFrom(payload.blindSniperMaxUses, numberFrom(process.env.BLIND_SNIPER_MAX_USES, 3)),
+    blindSniperStartRatio: numberFrom(payload.blindSniperStartRatio, numberFrom(process.env.BLIND_SNIPER_START_RATIO, 0.75)),
+    blindSniperStakeFraction: numberFrom(payload.blindSniperStakeFraction, numberFrom(process.env.BLIND_SNIPER_STAKE_FRACTION, 1 / 3))
   };
 }
 
+function summarizeRun(run, reason = run?.reason || 'manual') {
+  if (!run) return null;
+
+  const snapshot = run.snapshot || {};
+  const seed = roundMoney(numberFrom(run.seed ?? run.config?.seed ?? snapshot.seed ?? snapshot.balance ?? 10, 10));
+  const finalBalance = roundMoney(numberFrom(snapshot.balance ?? run.balance ?? seed, seed));
+  const totalTrades = Number(snapshot.totalTrades ?? run.totalTrades ?? 0);
+  const wins = Number(snapshot.wins ?? run.wins ?? 0);
+  const losses = Number(snapshot.losses ?? run.losses ?? 0);
+  const winRate = totalTrades ? roundMoney((wins / totalTrades) * 100) : 0;
+
+  return {
+    reason,
+    startedAt: run.startedAt || snapshot.startedAt || null,
+    stoppedAt: new Date().toISOString(),
+    mode: run.mode || run.config?.mode || 'demo',
+    accountId: run.accountId || run.config?.accountId || null,
+    accountKind: snapshot.accountKind || run.accountKind || null,
+    symbol: run.symbol || run.config?.symbol || 'R_100',
+    riskFloor: Number(snapshot.riskFloor ?? run.riskFloor ?? seed),
+    recoveryDebt: Number(snapshot.recoveryDebt ?? run.recoveryDebt ?? 0),
+    growthTier: Number(run.growthTier ?? 0),
+    growthStep: Number(run.growthStep ?? 0),
+    growthFloor: Number(run.growthFloor ?? 0),
+    gateStep: Number(run.gateStep ?? 0),
+    totalTrades,
+    wins,
+    losses,
+    winRate,
+    startingBalance: seed,
+    finalBalance,
+    netProfit: roundMoney(finalBalance - seed),
+    target: Number(run.target ?? run.config?.target ?? seed)
+  };
+}
+
+function buildRunPatch(bot, runDoc, extra = {}) {
+  const snapshot = bot ? bot.snapshot() : runDoc?.snapshot || null;
+
+  return {
+    snapshot,
+    balance: snapshot ? snapshot.balance : runDoc?.balance ?? null,
+    accountBalance: snapshot ? snapshot.accountBalance : runDoc?.accountBalance ?? null,
+    accountKind: snapshot ? snapshot.accountKind : runDoc?.accountKind ?? null,
+    phase: snapshot ? snapshot.phase : runDoc?.phase ?? null,
+    riskFloor: snapshot ? snapshot.riskFloor : runDoc?.riskFloor ?? null,
+    recoveryDebt: snapshot ? snapshot.recoveryDebt : runDoc?.recoveryDebt ?? null,
+    totalTrades: snapshot ? snapshot.totalTrades : runDoc?.totalTrades ?? 0,
+    wins: snapshot ? snapshot.wins : runDoc?.wins ?? 0,
+    losses: snapshot ? snapshot.losses : runDoc?.losses ?? 0,
+    winRate: bot ? bot.winRate() : runDoc?.winRate ?? 0,
+    growthTier: bot ? bot.growthTier() : runDoc?.growthTier ?? 0,
+    growthStep: bot ? bot.growthMilestoneStep() : runDoc?.growthStep ?? 0,
+    growthFloor: bot ? bot.growthStakeFloor() : runDoc?.growthFloor ?? 0,
+    gateStep: bot ? bot.profitGateStep() : runDoc?.gateStep ?? 0,
+    updatedAt: new Date(),
+    ...extra
+  };
+}
+
+function upsertRecentRun(run) {
+  if (!run) return;
+  recentRunsCache = [run, ...recentRunsCache.filter((item) => item.id !== run.id)]
+    .sort((a, b) => new Date(b.updatedAt || b.startedAt || 0) - new Date(a.updatedAt || a.startedAt || 0))
+    .slice(0, RUN_HISTORY_LIMIT);
+}
+
+function latestPausedRun() {
+  return recentRunsCache.find((run) => run.status === 'paused' && !(run.snapshot && run.snapshot.tradeInFlight)) || null;
+}
+
+function buildSessionState() {
+  const resumeRun = activeRun && activeRun.status === 'paused'
+    ? activeRun
+    : latestPausedRun();
+
+  return {
+    activeRun,
+    resumeRun,
+    recentRuns: recentRunsCache,
+    persistenceBackend,
+    bootError,
+    canStartNewRun: !activeRun,
+    canPause: Boolean(activeBot && !activeBot.paused && !activeBot.stopped),
+    canResume: Boolean(resumeRun)
+  };
+}
+
+function runBalanceState(run) {
+  if (!run) return null;
+
+  const snapshot = run.snapshot || {};
+  const seed = roundMoney(numberFrom(run.seed ?? run.config?.seed ?? snapshot.balance ?? 10, 10));
+  const target = roundMoney(numberFrom(run.target ?? run.config?.target ?? seed + 40, seed + 40));
+  const balance = roundMoney(numberFrom(snapshot.balance ?? run.balance ?? seed, seed));
+  const totalTrades = Number(snapshot.totalTrades ?? run.totalTrades ?? 0);
+  const wins = Number(snapshot.wins ?? run.wins ?? 0);
+  const losses = Number(snapshot.losses ?? run.losses ?? 0);
+  const phase = snapshot.phase || run.phase || 'growth';
+  const blindSniperEnabled = Boolean(snapshot.blindSniperEnabled ?? run.blindSniperEnabled ?? run.config?.blindSniperEnabled ?? false);
+  const blindSniperUses = Number(snapshot.blindSniperUses ?? run.blindSniperUses ?? run.config?.blindSniperUses ?? 0);
+  const blindSniperCadenceTrades = Number(snapshot.blindSniperCadenceTrades ?? run.blindSniperCadenceTrades ?? run.config?.blindSniperCadenceTrades ?? 3);
+  const blindSniperMaxUses = Number(snapshot.blindSniperMaxUses ?? run.blindSniperMaxUses ?? run.config?.blindSniperMaxUses ?? 3);
+  const blindSniperStartRatio = Number(snapshot.blindSniperStartRatio ?? run.blindSniperStartRatio ?? run.config?.blindSniperStartRatio ?? 0.75);
+  const blindSniperStakeFraction = Number(snapshot.blindSniperStakeFraction ?? run.blindSniperStakeFraction ?? run.config?.blindSniperStakeFraction ?? 1 / 3);
+  const blindSniperTradesSinceLastShot = Number(snapshot.blindSniperTradesSinceLastShot ?? run.blindSniperTradesSinceLastShot ?? run.config?.blindSniperTradesSinceLastShot ?? 0);
+  const blindSniperProgress = Math.max(0, Math.min(1, (balance - seed) / Math.max(0.01, target - seed)));
+  const blindSniperUsesRemaining = Math.max(0, blindSniperMaxUses - blindSniperUses);
+  const blindSniperTradesUntilShot = Math.max(0, blindSniperCadenceTrades - blindSniperTradesSinceLastShot);
+  const blindSniperArmed =
+    blindSniperEnabled &&
+    !['martingale', 'rebuild', 'stopped'].includes(phase) &&
+    blindSniperUsesRemaining > 0 &&
+    blindSniperProgress >= blindSniperStartRatio &&
+    blindSniperTradesSinceLastShot >= blindSniperCadenceTrades;
+  const blindSniperReason = !blindSniperEnabled
+    ? 'disabled'
+    : blindSniperUsesRemaining <= 0
+      ? 'quota_exhausted'
+      : ['martingale', 'rebuild', 'stopped'].includes(phase)
+        ? 'phase_blocked'
+        : blindSniperProgress < blindSniperStartRatio
+          ? 'progress_wait'
+          : blindSniperTradesSinceLastShot < blindSniperCadenceTrades
+            ? 'cadence_wait'
+            : 'armed';
+
+  return {
+    runId: run.id,
+    status: run.status,
+    balance,
+    accountBalance: snapshot.accountBalance ?? run.accountBalance ?? null,
+    phase,
+    seed,
+    target,
+    profitLoss: roundMoney(balance - seed),
+    totalTrades,
+    wins,
+    losses,
+    winRate: totalTrades ? roundMoney((wins / totalTrades) * 100) : 0,
+    riskFloor: Number(snapshot.riskFloor ?? run.riskFloor ?? seed),
+    recoveryDebt: Number(snapshot.recoveryDebt ?? run.recoveryDebt ?? 0),
+    growthTier: Number(snapshot.growthTier ?? run.growthTier ?? 0),
+    growthStep: Number(snapshot.growthStep ?? run.growthStep ?? 0),
+    growthFloor: Number(snapshot.growthFloor ?? run.growthFloor ?? 0),
+    gateStep: Number(snapshot.gateStep ?? run.gateStep ?? 0),
+    blindSniperEnabled,
+    blindSniperUses,
+    blindSniperUsesRemaining,
+    blindSniperTradesSinceLastShot,
+    blindSniperTradesUntilShot,
+    blindSniperCadenceTrades,
+    blindSniperMaxUses,
+    blindSniperStartRatio,
+    blindSniperStakeFraction,
+    blindSniperProgress,
+    blindSniperArmed,
+    blindSniperReason
+  };
+}
+
+async function persistRunState(bot, { eventType = null, payload = {}, appendEvent = true, extraPatch = {} } = {}) {
+  if (!activeRun) return null;
+
+  const patch = buildRunPatch(bot, activeRun, extraPatch);
+  if (appendEvent && eventType) {
+    await runStore.appendEvent(activeRun.id, { type: eventType, payload });
+  }
+
+  const updated = await runStore.updateRun(activeRun.id, patch);
+  if (updated) {
+    activeRun = updated;
+    upsertRecentRun(updated);
+  }
+  return updated;
+}
+
+async function initializePersistence() {
+  try {
+    await runStore.connect();
+    persistenceBackend = process.env.MONGODB_URL || process.env.MONGO_URL ? 'mongo' : 'memory';
+  } catch (error) {
+    console.warn(`Persistence store unavailable (${error.message}). Falling back to in-memory history.`);
+    bootError = error.message;
+    runStore = createRunStore({});
+    await runStore.connect();
+    persistenceBackend = 'memory';
+  }
+
+  recentRunsCache = await runStore.listRuns(RUN_HISTORY_LIMIT);
+
+  const latestActive = await runStore.getLatestActiveRun();
+  if (!latestActive) return;
+
+  if (['running', 'starting'].includes(latestActive.status)) {
+    const snapshot = latestActive.snapshot || {};
+    if (snapshot.tradeInFlight) {
+      const interrupted = await runStore.updateRun(latestActive.id, {
+        status: 'interrupted',
+        interruptedAt: new Date().toISOString(),
+        reason: 'server_restart',
+        summary: summarizeRun(latestActive, 'interrupted')
+      });
+      if (interrupted) upsertRecentRun(interrupted);
+      activeRun = null;
+      return;
+    }
+
+    const paused = await runStore.updateRun(latestActive.id, {
+      status: 'paused',
+      pausedAt: new Date().toISOString(),
+      pauseReason: 'server_restart',
+      reason: 'server_restart',
+      snapshot: {
+        ...snapshot,
+        paused: true,
+        pauseReason: 'server_restart',
+        stopped: false
+      }
+    });
+    if (paused) {
+      activeRun = paused;
+      upsertRecentRun(paused);
+    }
+    return;
+  }
+
+  if (latestActive.status === 'paused') {
+    activeRun = latestActive;
+    upsertRecentRun(latestActive);
+  }
+}
+
 function bindBot(bot) {
-  bot.on('status', (event) => io.emit('status', event));
-  bot.on('account', (event) => io.emit('account', event));
+  bot.on('status', (event) => {
+    io.emit('status', event);
+    void persistRunState(bot, {
+      eventType: 'status',
+      payload: event,
+      appendEvent: true,
+      extraPatch: {
+        status: event.status === 'stopped' ? 'ended' : event.status,
+        reason: event.pauseReason || activeRun?.reason || null
+      }
+    }).catch((error) => {
+      console.error('Failed to persist status event:', error);
+    });
+  });
+
+  bot.on('account', (event) => {
+    io.emit('account', event);
+    void persistRunState(bot, {
+      appendEvent: false,
+      extraPatch: {
+        accountId: event.accountId || activeRun?.accountId || null,
+        accountKind: event.accountKind || activeRun?.accountKind || null,
+        accountBalance: event.balance ?? null
+      }
+    }).catch((error) => {
+      console.error('Failed to persist account snapshot:', error);
+    });
+  });
+
   bot.on('digit', (event) => io.emit('digit', event));
   bot.on('analysis', (event) => io.emit('analysis', event));
-  bot.on('trade', (event) => io.emit('trade', event));
-  bot.on('phase_change', (event) => io.emit('phase_change', event));
-  bot.on('balance_update', (event) => {
-    lastSnapshot = event;
-    io.emit('balance_update', event);
+
+  bot.on('trade', (event) => {
+    io.emit('trade', event);
+    void persistRunState(bot, {
+      eventType: 'trade',
+      payload: event,
+      appendEvent: true
+    }).catch((error) => {
+      console.error('Failed to persist trade event:', error);
+    });
   });
-  bot.on('error_event', (event) => io.emit('bot_error', event));
+
+  bot.on('phase_change', (event) => {
+    io.emit('phase_change', event);
+    void persistRunState(bot, {
+      eventType: 'phase_change',
+      payload: event,
+      appendEvent: true,
+      extraPatch: {
+        phase: event.to
+      }
+    }).catch((error) => {
+      console.error('Failed to persist phase change:', error);
+    });
+  });
+
+  bot.on('balance_update', (event) => {
+    io.emit('balance_update', event);
+    void persistRunState(bot, {
+      appendEvent: false,
+      extraPatch: {
+        balance: event.balance,
+        accountBalance: event.accountBalance ?? null,
+        phase: event.phase,
+        totalTrades: event.totalTrades,
+        wins: event.wins,
+        losses: event.losses,
+        winRate: event.winRate,
+        riskFloor: event.riskFloor,
+        recoveryDebt: event.recoveryDebt,
+        growthTier: event.growthTier,
+        growthStep: event.growthStep,
+        growthFloor: event.growthFloor,
+        gateStep: event.gateStep
+      }
+    }).catch((error) => {
+      console.error('Failed to persist balance update:', error);
+    });
+  });
+
+  bot.on('error_event', (event) => {
+    io.emit('bot_error', event);
+    void persistRunState(bot, {
+      eventType: 'error',
+      payload: event,
+      appendEvent: true
+    }).catch((error) => {
+      console.error('Failed to persist bot error:', error);
+    });
+  });
+
   bot.on('bot_stopped', (summary) => {
     io.emit('bot_stopped', summary);
-    activeBot = null;
+    void persistRunState(bot, {
+      eventType: 'bot_stopped',
+      payload: summary,
+      appendEvent: true,
+      extraPatch: {
+        status: 'ended',
+        endedAt: summary.stoppedAt,
+        summary,
+        reason: summary.reason
+      }
+    })
+      .then((updated) => {
+        if (updated) upsertRecentRun(updated);
+        activeBot = null;
+        activeRun = null;
+      })
+      .catch((error) => {
+        console.error('Failed to persist run stop:', error);
+        activeBot = null;
+        activeRun = null;
+      });
   });
+}
+
+function sendSessionState(socket) {
+  const state = buildSessionState();
+  socket.emit('config', publicConfig());
+  socket.emit('session_state', state);
+
+  const currentState = runBalanceState(activeRun);
+  if (currentState) {
+    socket.emit('balance_update', currentState);
+  }
+}
+
+function buildRunFromResumeSource(payload = {}) {
+  if (!activeRun) return null;
+
+  const token = resolveToken(payload.token || '');
+  if (activeRun.snapshot && activeRun.snapshot.tradeInFlight) {
+    throw new Error('This run was interrupted while a trade was still open. End it and start a new run instead.');
+  }
+
+  const resumePayload = {
+    ...activeRun.config,
+    seed: activeRun.seed,
+    target: activeRun.target,
+    mode: activeRun.mode,
+    accountId: activeRun.accountId || activeRun.config?.accountId || '',
+    guideFilters: activeRun.config?.guideFilters,
+    strictBarFilters: activeRun.config?.strictBarFilters,
+    token
+  };
+
+  return sanitizeStartPayload(resumePayload);
+}
+
+async function startFreshRun(payload = {}) {
+  const config = sanitizeStartPayload(payload);
+  const { token, ...storedConfig } = config;
+  const bot = new DerivDigitBot(config);
+  const initialSnapshot = bot.snapshot();
+
+  const runDoc = await runStore.createRun({
+    status: 'starting',
+    reason: 'manual',
+    mode: config.mode,
+    symbol: config.symbol,
+    currency: config.currency,
+    accountId: config.accountId || null,
+    accountKind: null,
+    seed: config.seed,
+    target: config.target,
+    config: storedConfig,
+    snapshot: initialSnapshot,
+    balance: initialSnapshot.balance,
+    accountBalance: initialSnapshot.accountBalance,
+    phase: initialSnapshot.phase,
+    riskFloor: initialSnapshot.riskFloor,
+    recoveryDebt: initialSnapshot.recoveryDebt,
+    totalTrades: initialSnapshot.totalTrades,
+    wins: initialSnapshot.wins,
+    losses: initialSnapshot.losses,
+    winRate: 0,
+    growthTier: bot.growthTier(),
+    growthStep: bot.growthMilestoneStep(),
+    growthFloor: bot.growthStakeFloor(),
+    gateStep: bot.profitGateStep(),
+    startedAt: bot.startedAt ? bot.startedAt.toISOString() : new Date().toISOString()
+  });
+
+  activeBot = bot;
+  activeRun = runDoc;
+  upsertRecentRun(runDoc);
+  bindBot(bot);
+
+  try {
+    await bot.start();
+    activeRun = await runStore.getRun(runDoc.id);
+    if (activeRun) upsertRecentRun(activeRun);
+    return runDoc;
+  } catch (error) {
+    const failedRun = await runStore.updateRun(runDoc.id, {
+      status: 'failed',
+      endedAt: new Date().toISOString(),
+      reason: error.message,
+      summary: {
+        reason: 'start_failed',
+        message: error.message,
+        startedAt: runDoc.startedAt,
+        stoppedAt: new Date().toISOString(),
+        mode: config.mode,
+        seed: config.seed,
+        target: config.target
+      }
+    });
+    if (failedRun) upsertRecentRun(failedRun);
+    activeBot = null;
+    activeRun = null;
+    throw error;
+  }
+}
+
+async function resumePausedRun(payload = {}) {
+  const sourceRun = activeRun && activeRun.status === 'paused' ? activeRun : latestPausedRun();
+  if (!sourceRun) {
+    throw new Error('No paused run is available to resume.');
+  }
+
+  if (sourceRun.snapshot && sourceRun.snapshot.tradeInFlight) {
+    throw new Error('This paused run still thinks a trade is in flight. End it and start fresh instead.');
+  }
+
+  const config = sanitizeStartPayload({
+    ...sourceRun.config,
+    seed: sourceRun.seed,
+    target: sourceRun.target,
+    mode: sourceRun.mode,
+    accountId: sourceRun.accountId || sourceRun.config?.accountId || '',
+    guideFilters: sourceRun.config?.guideFilters,
+    strictBarFilters: sourceRun.config?.strictBarFilters,
+    token: payload.token || ''
+  });
+
+  const bot = new DerivDigitBot(config);
+  bot.restoreState(sourceRun.snapshot || {});
+
+  activeBot = bot;
+  activeRun = sourceRun;
+  bindBot(bot);
+
+  await bot.start();
+  activeRun = await runStore.getRun(sourceRun.id);
+  if (activeRun) upsertRecentRun(activeRun);
+  return activeRun;
+}
+
+async function pauseActiveRun(reason = 'manual') {
+  if (!activeBot || !activeRun) {
+    throw new Error('No active run is running.');
+  }
+
+  activeBot.pause(reason);
+  return true;
+}
+
+async function stopActiveRun(reason = 'manual') {
+  if (activeBot && activeRun) {
+    const bot = activeBot;
+    await bot.stop(reason);
+    return true;
+  }
+
+  if (activeRun && activeRun.status === 'paused') {
+    const summary = summarizeRun(activeRun, reason);
+    const updated = await runStore.updateRun(activeRun.id, {
+      status: 'ended',
+      endedAt: new Date().toISOString(),
+      reason,
+      summary
+    });
+    if (updated) upsertRecentRun(updated);
+    io.emit('bot_stopped', summary);
+    activeRun = null;
+    return true;
+  }
+
+  throw new Error('No bot is running.');
 }
 
 app.use(requireBasicAuth);
 app.get('/api/config', (req, res) => res.json(publicConfig()));
+app.get('/api/state', (req, res) => res.json(buildSessionState()));
+app.get('/api/runs', async (req, res, next) => {
+  try {
+    const limit = Math.max(1, Math.min(50, numberFrom(req.query.limit, RUN_HISTORY_LIMIT)));
+    const runs = await runStore.listRuns(limit);
+    res.json({ runs, persistenceBackend });
+  } catch (error) {
+    next(error);
+  }
+});
+app.get('/api/runs/:runId', async (req, res, next) => {
+  try {
+    const run = await runStore.getRun(req.params.runId);
+    if (!run) {
+      res.status(404).json({ error: 'Run not found.' });
+      return;
+    }
+    res.json({ run });
+  } catch (error) {
+    next(error);
+  }
+});
+app.get('/api/runs/:runId/events', async (req, res, next) => {
+  try {
+    const limit = Math.max(1, Math.min(500, numberFrom(req.query.limit, 200)));
+    const run = await runStore.getRun(req.params.runId);
+    if (!run) {
+      res.status(404).json({ error: 'Run not found.' });
+      return;
+    }
+    const events = await runStore.getRunEvents(run.id, limit);
+    res.json({ runId: run.id, events });
+  } catch (error) {
+    next(error);
+  }
+});
 app.use(express.static(PUBLIC_DIR));
 
 io.use((socket, next) => {
@@ -154,29 +710,66 @@ io.use((socket, next) => {
 });
 
 io.on('connection', (socket) => {
-  socket.emit('config', publicConfig());
-  if (lastSnapshot) socket.emit('balance_update', lastSnapshot);
+  sendSessionState(socket);
 
   socket.on('start_bot', async (payload, ack) => {
     try {
-      if (activeBot) throw new Error('Bot is already running.');
-      const config = sanitizeStartPayload(payload);
-      activeBot = new DerivDigitBot(config);
-      bindBot(activeBot);
-      await activeBot.start();
-      if (typeof ack === 'function') ack({ ok: true });
+      if (activeBot && !activeBot.stopped) {
+        throw new Error('A run is already active. Pause or stop it before starting a new one.');
+      }
+
+      await startFreshRun(payload);
+      if (typeof ack === 'function') ack({ ok: true, run: activeRun });
     } catch (error) {
-      activeBot = null;
       if (typeof ack === 'function') ack({ ok: false, error: error.message });
       socket.emit('bot_error', { message: error.message });
     }
   });
 
-  socket.on('stop_bot', async (payload, ack) => {
+  socket.on('pause_bot', async (_payload, ack) => {
     try {
-      if (!activeBot) throw new Error('No bot is running.');
-      await activeBot.stop('manual');
+      await pauseActiveRun('manual');
+      if (typeof ack === 'function') ack({ ok: true, run: activeRun });
+    } catch (error) {
+      if (typeof ack === 'function') ack({ ok: false, error: error.message });
+      socket.emit('bot_error', { message: error.message });
+    }
+  });
+
+  socket.on('resume_bot', async (payload, ack) => {
+    try {
+      if (activeBot && activeRun && activeRun.status === 'paused') {
+        activeBot.resume('manual');
+        if (typeof ack === 'function') ack({ ok: true, run: activeRun });
+        return;
+      }
+
+      await resumePausedRun(payload || {});
+      if (typeof ack === 'function') ack({ ok: true, run: activeRun });
+    } catch (error) {
+      if (typeof ack === 'function') ack({ ok: false, error: error.message });
+      socket.emit('bot_error', { message: error.message });
+    }
+  });
+
+  socket.on('stop_bot', async (_payload, ack) => {
+    try {
+      await stopActiveRun('manual');
       if (typeof ack === 'function') ack({ ok: true });
+    } catch (error) {
+      if (typeof ack === 'function') ack({ ok: false, error: error.message });
+      socket.emit('bot_error', { message: error.message });
+    }
+  });
+
+  socket.on('refresh_runs', async (_payload, ack) => {
+    try {
+      recentRunsCache = await runStore.listRuns(RUN_HISTORY_LIMIT);
+      if (typeof ack === 'function') {
+        ack({ ok: true, state: buildSessionState() });
+      } else {
+        socket.emit('session_state', buildSessionState());
+      }
     } catch (error) {
       if (typeof ack === 'function') ack({ ok: false, error: error.message });
       socket.emit('bot_error', { message: error.message });
@@ -184,9 +777,30 @@ io.on('connection', (socket) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`Deriv Digit Bot dashboard listening on http://localhost:${PORT}`);
-  if (!process.env.DASHBOARD_PASSWORD) {
-    console.log('Warning: DASHBOARD_PASSWORD is not set. Do not expose this dashboard publicly.');
+app.use((error, req, res, next) => {
+  console.error(error);
+  if (res.headersSent) {
+    next(error);
+    return;
   }
+  res.status(500).json({ error: error.message || 'Internal server error' });
+});
+
+async function main() {
+  await initializePersistence();
+
+  server.listen(PORT, () => {
+    console.log(`Deriv Digit Bot dashboard listening on http://localhost:${PORT}`);
+    if (!process.env.DASHBOARD_PASSWORD) {
+      console.log('Warning: DASHBOARD_PASSWORD is not set. Do not expose this dashboard publicly.');
+    }
+    if (bootError) {
+      console.log(`Persistence notice: ${bootError}`);
+    }
+  });
+}
+
+void main().catch((error) => {
+  console.error('Failed to boot server:', error);
+  process.exitCode = 1;
 });
