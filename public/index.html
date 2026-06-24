@@ -615,6 +615,7 @@
             <option value="real">Deriv Real</option>
           </select>
         </div>
+        <div class="field-help">The base equity-to-target loop always runs. Guide filters, growth stairs, and sniper shots are optional overlays.</div>
 
         <div class="switch-row">
           <label for="guideFilters" title="Optional extra checks from the strategy notes. Leave this off if you want the core loop to trade continuously.">Guide filters</label>
@@ -627,10 +628,28 @@
         </div>
 
         <div class="switch-row">
-          <label for="blindSniper" title="After every 3 completed trades, once the run is at least 75% to target, the bot can fire up to 3 blind sniper shots at one-third balance.">Blind sniper</label>
+          <label for="growthStairs" title="Raise the growth stake floor after each mini profit milestone.">Growth stairs</label>
+          <input id="growthStairs" type="checkbox">
+        </div>
+        <div class="field-help">When enabled, each mini milestone bumps the growth floor a little higher so long win streaks feel less flat.</div>
+
+        <div class="field">
+          <label for="initialStake">Initial stake <span class="muted">(optional)</span></label>
+          <input id="initialStake" type="number" min="0" step="0.01" placeholder="Auto">
+          <div class="field-help">Used only for the first growth trade. Leave blank and the bot will fall back to the normal base stake.</div>
+        </div>
+
+        <div class="switch-row">
+          <label for="blindSniper" title="The bot can fire up to 3 blind sniper shots at the configured progress marks.">Blind sniper</label>
           <input id="blindSniper" type="checkbox">
         </div>
-        <div class="field-help">This one ignores the extra guide filters. It only becomes active late in the run, then waits for the 3-trade cadence before taking a shot.</div>
+        <div class="field-help">This overlay ignores guide filters. It arms at the configured marks and waits for the 3-trade cadence before firing.</div>
+
+        <div class="field">
+          <label for="blindSniperMarks">Sniper marks <span class="muted">(optional)</span></label>
+          <input id="blindSniperMarks" type="text" autocomplete="off" placeholder="25, 50, 75">
+          <div class="field-help">Comma-separated progress marks in percent. Leave blank to use 25, 50, and 75.</div>
+        </div>
 
         <div class="actions">
           <button id="startBtn" class="start">START</button>
@@ -673,6 +692,8 @@
             <span id="gateFloorText">Protected floor $0.00</span>
             <span id="recoveryDebtText">Recovery debt $0.00</span>
             <span id="gateStepText">Gate step $0.00</span>
+            <span id="recoveryText">Recovery split off</span>
+            <span id="stairsText">Growth stairs off</span>
             <span id="growthTierText">Growth tier 0</span>
             <span id="growthFloorText">Growth floor $0.00</span>
             <span id="sniperText">Blind sniper off</span>
@@ -772,7 +793,10 @@
       mode: document.getElementById('mode'),
       guideFilters: document.getElementById('guideFilters'),
       strictBars: document.getElementById('strictBars'),
+      growthStairs: document.getElementById('growthStairs'),
+      initialStake: document.getElementById('initialStake'),
       blindSniper: document.getElementById('blindSniper'),
+      blindSniperMarks: document.getElementById('blindSniperMarks'),
       startBtn: document.getElementById('startBtn'),
       stopBtn: document.getElementById('stopBtn'),
       pauseBtn: document.getElementById('pauseBtn'),
@@ -792,6 +816,8 @@
       gateFloorText: document.getElementById('gateFloorText'),
       recoveryDebtText: document.getElementById('recoveryDebtText'),
       gateStepText: document.getElementById('gateStepText'),
+      recoveryText: document.getElementById('recoveryText'),
+      stairsText: document.getElementById('stairsText'),
       growthTierText: document.getElementById('growthTierText'),
       growthFloorText: document.getElementById('growthFloorText'),
       sniperText: document.getElementById('sniperText'),
@@ -820,7 +846,10 @@
     let currentBlindSniperCadenceTrades = 3;
     let currentBlindSniperMaxUses = 3;
     let currentBlindSniperStartRatio = 0.75;
+    let currentBlindSniperMilestones = [0.25, 0.5, 0.75];
     let currentBlindSniperStakeFraction = 1 / 3;
+    let currentGrowthStairsEnabled = false;
+    let currentInitialStake = null;
     let currentRunStatus = 'idle';
     let currentActiveRunId = null;
     let currentResumeRunId = null;
@@ -882,6 +911,50 @@
       return text.length > 8 ? text.slice(-8) : text;
     }
 
+    function normalizeMilestoneList(value, fallback = [0.25, 0.5, 0.75]) {
+      const source = Array.isArray(value)
+        ? value
+        : String(value ?? '')
+          .split(/[,\s]+/)
+          .map((item) => item.trim())
+          .filter(Boolean);
+
+      const parsed = source
+        .map((item) => {
+          const numeric = Number(item);
+          if (!Number.isFinite(numeric)) return null;
+          return Math.min(Math.max(numeric > 1 ? numeric / 100 : numeric, 0), 1);
+        })
+        .filter((item) => item !== null);
+
+      if (!parsed.length) return fallback.slice();
+
+      const deduped = [];
+      for (const milestone of parsed) {
+        if (!deduped.some((item) => Math.abs(item - milestone) < 1e-9)) {
+          deduped.push(milestone);
+        }
+      }
+
+      return deduped.sort((a, b) => a - b);
+    }
+
+    function formatMilestoneList(value) {
+      const list = normalizeMilestoneList(value, []);
+      return list.length ? list.map((item) => Math.round(item * 100)).join(', ') : '';
+    }
+
+    function parseOptionalNumber(value, fallback = null) {
+      if (value === null || value === undefined || value === '') return fallback;
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? numeric : fallback;
+    }
+
+    function optionalInputValue(value) {
+      const numeric = parseOptionalNumber(value, null);
+      return numeric === null ? '' : numeric;
+    }
+
     function statusLabel(value) {
       const text = String(value || 'idle').replace(/_/g, ' ');
       return text.charAt(0).toUpperCase() + text.slice(1);
@@ -895,12 +968,19 @@
       const tradesUntilShot = Number(event.blindSniperTradesUntilShot ?? 0);
       const progressPct = Math.round(Number(event.blindSniperProgress ?? 0) * 100);
       const reason = String(event.blindSniperReason || '');
-      const startPct = Math.round(Number(event.blindSniperStartRatio || 0.75) * 100);
+      const nextPct = Math.round(Number(
+        event.blindSniperNextMilestone ??
+        event.blindSniperStartRatio ??
+        (Array.isArray(event.blindSniperMilestones) && event.blindSniperMilestones.length
+          ? event.blindSniperMilestones[Math.min(Number(event.blindSniperUses || 0), event.blindSniperMilestones.length - 1)]
+          : 0.75)
+      ) * 100);
 
       if (usesRemaining <= 0) return 'Blind sniper quota used';
       if (event.blindSniperArmed) return `Blind sniper armed (${usesRemaining}/${maxUses} uses left)`;
-      if (reason === 'progress_wait') return `Blind sniper waiting for ${startPct}%+`;
+      if (reason === 'progress_wait') return `Blind sniper waiting for ${nextPct}%+`;
       if (reason === 'cadence_wait') return `Blind sniper ready, ${tradesUntilShot} trade(s) away`;
+      if (reason === 'recovery_blocked') return 'Blind sniper waiting for split recovery to clear';
       if (reason === 'phase_blocked') return 'Blind sniper waiting for an offensive phase';
       if (reason === 'disabled') return 'Blind sniper off';
       return `Blind sniper ${progressPct}% to target`;
@@ -1166,21 +1246,34 @@
       const losses = Number(snapshot.losses ?? run.losses ?? 0);
       const config = run.config || {};
       const phase = String(snapshot.phase || run.phase || 'growth');
+      const growthStairsEnabled = Boolean(snapshot.growthStairsEnabled ?? run.growthStairsEnabled ?? config.growthStairsEnabled ?? false);
+      const initialStake = snapshot.initialStake ?? run.initialStake ?? config.initialStake ?? null;
       const blindSniperEnabled = Boolean(snapshot.blindSniperEnabled ?? run.blindSniperEnabled ?? config.blindSniperEnabled ?? false);
       const blindSniperUses = Number(snapshot.blindSniperUses ?? run.blindSniperUses ?? config.blindSniperUses ?? 0);
       const blindSniperCadenceTrades = Number(snapshot.blindSniperCadenceTrades ?? run.blindSniperCadenceTrades ?? config.blindSniperCadenceTrades ?? 3);
       const blindSniperMaxUses = Number(snapshot.blindSniperMaxUses ?? run.blindSniperMaxUses ?? config.blindSniperMaxUses ?? 3);
-      const blindSniperStartRatio = Number(snapshot.blindSniperStartRatio ?? run.blindSniperStartRatio ?? config.blindSniperStartRatio ?? 0.75);
+      const blindSniperMilestones = normalizeMilestoneList(
+        snapshot.blindSniperMilestones ?? run.blindSniperMilestones ?? config.blindSniperMilestones ?? null,
+        [0.25, 0.5, Number(snapshot.blindSniperStartRatio ?? run.blindSniperStartRatio ?? config.blindSniperStartRatio ?? 0.75)]
+      );
+      const blindSniperStartRatio = Number(snapshot.blindSniperStartRatio ?? run.blindSniperStartRatio ?? config.blindSniperStartRatio ?? blindSniperMilestones[blindSniperMilestones.length - 1] ?? 0.75);
       const blindSniperStakeFraction = Number(snapshot.blindSniperStakeFraction ?? run.blindSniperStakeFraction ?? config.blindSniperStakeFraction ?? 1 / 3);
       const blindSniperTradesSinceLastShot = Number(snapshot.blindSniperTradesSinceLastShot ?? run.blindSniperTradesSinceLastShot ?? config.blindSniperTradesSinceLastShot ?? 0);
       const blindSniperProgress = Math.max(0, Math.min(1, (balance - seed) / Math.max(0.01, target - seed)));
-      const blindSniperUsesRemaining = Math.max(0, blindSniperMaxUses - blindSniperUses);
+      const blindSniperMilestoneIndex = Math.min(blindSniperUses, Math.max(0, blindSniperMilestones.length - 1));
+      const blindSniperNextMilestone = Number(
+        snapshot.blindSniperNextMilestone ??
+        run.blindSniperNextMilestone ??
+        blindSniperMilestones[blindSniperMilestoneIndex] ??
+        blindSniperStartRatio
+      );
+      const blindSniperUsesRemaining = Math.max(0, Math.min(blindSniperMaxUses, blindSniperMilestones.length) - blindSniperUses);
       const blindSniperTradesUntilShot = Math.max(0, blindSniperCadenceTrades - blindSniperTradesSinceLastShot);
       const blindSniperArmed =
         blindSniperEnabled &&
         !['martingale', 'rebuild', 'stopped'].includes(phase) &&
         blindSniperUsesRemaining > 0 &&
-        blindSniperProgress >= blindSniperStartRatio &&
+        blindSniperProgress >= blindSniperNextMilestone &&
         blindSniperTradesSinceLastShot >= blindSniperCadenceTrades;
       const blindSniperReason = !blindSniperEnabled
         ? 'disabled'
@@ -1188,7 +1281,7 @@
           ? 'quota_exhausted'
           : ['martingale', 'rebuild', 'stopped'].includes(phase)
             ? 'phase_blocked'
-            : blindSniperProgress < blindSniperStartRatio
+            : blindSniperProgress < blindSniperNextMilestone
               ? 'progress_wait'
               : blindSniperTradesSinceLastShot < blindSniperCadenceTrades
                 ? 'cadence_wait'
@@ -1196,8 +1289,11 @@
 
       currentBlindSniperCadenceTrades = blindSniperCadenceTrades;
       currentBlindSniperMaxUses = blindSniperMaxUses;
-      currentBlindSniperStartRatio = blindSniperStartRatio;
+      currentBlindSniperMilestones = blindSniperMilestones;
+      currentBlindSniperStartRatio = blindSniperNextMilestone;
       currentBlindSniperStakeFraction = blindSniperStakeFraction;
+      currentGrowthStairsEnabled = growthStairsEnabled;
+      currentInitialStake = initialStake;
 
       currentSeed = seed;
       currentTarget = target;
@@ -1205,6 +1301,9 @@
       el.target.value = target;
       if (run.mode) el.mode.value = run.mode;
       if (run.accountId) el.accountId.value = run.accountId;
+      el.growthStairs.checked = growthStairsEnabled;
+      el.initialStake.value = optionalInputValue(initialStake);
+      el.blindSniperMarks.value = formatMilestoneList(blindSniperMilestones);
 
       resetEquityTrail();
       updateStats({
@@ -1227,6 +1326,14 @@
         growthStep: Number(snapshot.growthStep ?? run.growthStep ?? 0),
         growthFloor: Number(snapshot.growthFloor ?? run.growthFloor ?? currentMinStake),
         gateStep: Number(snapshot.gateStep ?? run.gateStep ?? Math.max(currentMinStake * 2, seed * currentProfitGatePercent)),
+        growthStairsEnabled,
+        initialStake,
+        martingaleLossStreak: Number(snapshot.martingaleLossStreak ?? run.martingaleLossStreak ?? 0),
+        martingaleRetryLimit: Number(snapshot.martingaleRetryLimit ?? run.martingaleRetryLimit ?? 2),
+        splitRecoveryArmed: Boolean(snapshot.splitRecoveryArmed ?? run.splitRecoveryArmed ?? false),
+        splitRecoveryReadyAtTrade: Number(snapshot.splitRecoveryReadyAtTrade ?? run.splitRecoveryReadyAtTrade ?? 0),
+        splitRecoveryPiecesRemaining: Number(snapshot.splitRecoveryPiecesRemaining ?? run.splitRecoveryPiecesRemaining ?? 0),
+        splitRecoveryPieces: Number(snapshot.splitRecoveryPieces ?? run.splitRecoveryPieces ?? 2),
         blindSniperEnabled,
         blindSniperUses,
         blindSniperUsesRemaining,
@@ -1235,9 +1342,11 @@
         blindSniperCadenceTrades,
         blindSniperMaxUses,
         blindSniperStartRatio,
+        blindSniperMilestones,
         blindSniperStakeFraction,
         blindSniperProgress,
         blindSniperArmed,
+        blindSniperNextMilestone,
         blindSniperReason
       }, null, 'balance');
       currentActiveRunId = run.id || null;
@@ -1247,10 +1356,20 @@
 
     function refreshInputsFromRun(run) {
       if (!run) return;
+      const snapshot = run.snapshot || {};
       if (run.seed !== undefined) el.seed.value = run.seed;
       if (run.target !== undefined) el.target.value = run.target;
       if (run.mode) el.mode.value = run.mode;
       if (run.accountId) el.accountId.value = run.accountId;
+      const growthStairsEnabled = Boolean(snapshot.growthStairsEnabled ?? run.growthStairsEnabled ?? run.config?.growthStairsEnabled ?? false);
+      const initialStake = snapshot.initialStake ?? run.initialStake ?? run.config?.initialStake ?? null;
+      const blindSniperMilestones = normalizeMilestoneList(
+        snapshot.blindSniperMilestones ?? run.blindSniperMilestones ?? run.config?.blindSniperMilestones ?? null,
+        [0.25, 0.5, Number(snapshot.blindSniperStartRatio ?? run.blindSniperStartRatio ?? run.config?.blindSniperStartRatio ?? 0.75)]
+      );
+      el.growthStairs.checked = growthStairsEnabled;
+      el.initialStake.value = optionalInputValue(initialStake);
+      el.blindSniperMarks.value = formatMilestoneList(blindSniperMilestones);
       if (run.config && run.config.blindSniperEnabled !== undefined) {
         el.blindSniper.checked = Boolean(run.config.blindSniperEnabled);
       } else if (run.blindSniperEnabled !== undefined) {
@@ -1333,6 +1452,8 @@
       el.gateFloorText.textContent = `Protected floor ${money(currentSeed)}`;
       el.recoveryDebtText.textContent = 'Recovery debt $0.00';
       el.gateStepText.textContent = `Gate step ${money(Math.max(currentMinStake * 2, currentSeed * currentProfitGatePercent))}`;
+      el.recoveryText.textContent = 'Recovery split off';
+      el.stairsText.textContent = currentGrowthStairsEnabled ? 'Growth stairs on' : 'Growth stairs off';
       el.growthTierText.textContent = 'Growth tier 0';
       el.growthFloorText.textContent = `Growth floor ${money(currentMinStake)}`;
       el.sniperText.textContent = 'Blind sniper off';
@@ -1488,16 +1609,34 @@
       const gateStep = Number(event.gateStep || 0);
       const growthTier = Number(event.growthTier || 0);
       const growthFloor = Number(event.growthFloor || currentMinStake);
+      const growthStairsEnabled = Boolean(event.growthStairsEnabled ?? currentGrowthStairsEnabled);
+      const initialStake = event.initialStake ?? currentInitialStake;
+      const martingaleLossStreak = Number(event.martingaleLossStreak || 0);
+      const martingaleRetryLimit = Number(event.martingaleRetryLimit || 2);
+      const splitRecoveryArmed = Boolean(event.splitRecoveryArmed);
+      const splitRecoveryReadyAtTrade = Number(event.splitRecoveryReadyAtTrade || 0);
+      const splitRecoveryPiecesRemaining = Number(event.splitRecoveryPiecesRemaining || 0);
+      const splitRecoveryPieces = Number(event.splitRecoveryPieces || 2);
+      const splitRecoveryWait = splitRecoveryArmed
+        ? Math.max(0, splitRecoveryReadyAtTrade - Number(event.totalTrades || lastRenderedTrades || 0))
+        : 0;
       const sniperText = sniperStatusLabel(event);
 
+      currentGrowthStairsEnabled = growthStairsEnabled;
+      currentInitialStake = initialStake;
       if (Number.isFinite(Number(event.blindSniperCadenceTrades))) {
         currentBlindSniperCadenceTrades = Number(event.blindSniperCadenceTrades);
       }
       if (Number.isFinite(Number(event.blindSniperMaxUses))) {
         currentBlindSniperMaxUses = Number(event.blindSniperMaxUses);
       }
-      if (Number.isFinite(Number(event.blindSniperStartRatio))) {
+      if (Number.isFinite(Number(event.blindSniperNextMilestone))) {
+        currentBlindSniperStartRatio = Number(event.blindSniperNextMilestone);
+      } else if (Number.isFinite(Number(event.blindSniperStartRatio))) {
         currentBlindSniperStartRatio = Number(event.blindSniperStartRatio);
+      }
+      if (Array.isArray(event.blindSniperMilestones) && event.blindSniperMilestones.length) {
+        currentBlindSniperMilestones = normalizeMilestoneList(event.blindSniperMilestones, currentBlindSniperMilestones);
       }
       if (Number.isFinite(Number(event.blindSniperStakeFraction))) {
         currentBlindSniperStakeFraction = Number(event.blindSniperStakeFraction);
@@ -1524,6 +1663,13 @@
         el.progressText.textContent = `${Math.max(0, Math.min(100, ((balance - currentSeed) / Math.max(0.01, currentTarget - currentSeed)) * 100)).toFixed(1)}%`;
         el.progressMarker.title = `Session equity ${money(balance)}`;
       }
+
+      el.recoveryText.textContent = splitRecoveryArmed
+        ? `Recovery split armed, next strike in ${splitRecoveryWait} trade(s) (${splitRecoveryPiecesRemaining}/${splitRecoveryPieces} left)`
+        : martingaleLossStreak > 0
+          ? `Martingale retry ${martingaleLossStreak}/${martingaleRetryLimit}`
+          : 'Recovery split off';
+      el.stairsText.textContent = growthStairsEnabled ? 'Growth stairs on' : 'Growth stairs off';
 
       if (source !== 'trade') {
         el.gateFloorText.textContent = `Protected floor ${money(gateFloor)}`;
@@ -1554,6 +1700,9 @@
       viewRows = [];
       currentSeed = Number(el.seed.value);
       currentTarget = Number(el.target.value);
+      const startBlindSniperMilestones = normalizeMilestoneList(el.blindSniperMarks.value || currentBlindSniperMilestones, currentBlindSniperMilestones);
+      currentBlindSniperMilestones = startBlindSniperMilestones;
+      currentBlindSniperStartRatio = startBlindSniperMilestones[startBlindSniperMilestones.length - 1] ?? currentBlindSniperStartRatio;
       resetEquityTrail();
       updateStats({
         balance: currentSeed,
@@ -1562,6 +1711,14 @@
         phase: 'growth',
         totalTrades: 0,
         winRate: 0,
+        growthStairsEnabled: el.growthStairs.checked,
+        initialStake: el.initialStake.value === '' ? null : Number(el.initialStake.value),
+        martingaleLossStreak: 0,
+        martingaleRetryLimit: 2,
+        splitRecoveryArmed: false,
+        splitRecoveryReadyAtTrade: 0,
+        splitRecoveryPiecesRemaining: 0,
+        splitRecoveryPieces: 2,
         blindSniperEnabled: el.blindSniper.checked,
         blindSniperUses: 0,
         blindSniperUsesRemaining: currentBlindSniperMaxUses,
@@ -1570,9 +1727,11 @@
         blindSniperCadenceTrades: currentBlindSniperCadenceTrades,
         blindSniperMaxUses: currentBlindSniperMaxUses,
         blindSniperStartRatio: currentBlindSniperStartRatio,
+        blindSniperMilestones: startBlindSniperMilestones,
         blindSniperStakeFraction: currentBlindSniperStakeFraction,
         blindSniperProgress: 0,
         blindSniperArmed: false,
+        blindSniperNextMilestone: startBlindSniperMilestones[0] ?? currentBlindSniperStartRatio,
         blindSniperReason: el.blindSniper.checked ? 'progress_wait' : 'disabled'
       }, 0, 'balance');
 
@@ -1584,7 +1743,10 @@
         mode: el.mode.value,
         guideFilters: el.guideFilters.checked,
         strictBarFilters: el.strictBars.checked,
-        blindSniperEnabled: el.blindSniper.checked
+        growthStairsEnabled: el.growthStairs.checked,
+        initialStake: el.initialStake.value,
+        blindSniperEnabled: el.blindSniper.checked,
+        blindSniperMilestones: el.blindSniperMarks.value
       }, (response) => {
         if (!response || !response.ok) {
           showBanner('danger', response && response.error ? response.error : 'Start failed');
@@ -1641,15 +1803,22 @@
       if (Number.isFinite(Number(config.profitGatePercent))) {
         currentProfitGatePercent = Number(config.profitGatePercent);
       }
+      currentGrowthStairsEnabled = Boolean(config.growthStairsEnabled);
+      el.growthStairs.checked = currentGrowthStairsEnabled;
+      currentInitialStake = parseOptionalNumber(config.initialStake, null);
+      el.initialStake.value = optionalInputValue(currentInitialStake);
       if (Number.isFinite(Number(config.blindSniperCadenceTrades))) {
         currentBlindSniperCadenceTrades = Number(config.blindSniperCadenceTrades);
       }
       if (Number.isFinite(Number(config.blindSniperMaxUses))) {
         currentBlindSniperMaxUses = Number(config.blindSniperMaxUses);
       }
-      if (Number.isFinite(Number(config.blindSniperStartRatio))) {
-        currentBlindSniperStartRatio = Number(config.blindSniperStartRatio);
+      if (Array.isArray(config.blindSniperMilestones) && config.blindSniperMilestones.length) {
+        currentBlindSniperMilestones = normalizeMilestoneList(config.blindSniperMilestones, currentBlindSniperMilestones);
+      } else if (Number.isFinite(Number(config.blindSniperStartRatio))) {
+        currentBlindSniperMilestones = normalizeMilestoneList(config.blindSniperStartRatio, currentBlindSniperMilestones);
       }
+      currentBlindSniperStartRatio = currentBlindSniperMilestones[currentBlindSniperMilestones.length - 1] ?? currentBlindSniperStartRatio;
       if (Number.isFinite(Number(config.blindSniperStakeFraction))) {
         currentBlindSniperStakeFraction = Number(config.blindSniperStakeFraction);
       }
@@ -1658,6 +1827,7 @@
       el.guideFilters.checked = Boolean(config.guideFilters);
       el.strictBars.checked = Boolean(config.strictBarFilters);
       el.blindSniper.checked = Boolean(config.blindSniperEnabled);
+      el.blindSniperMarks.value = formatMilestoneList(currentBlindSniperMilestones);
       el.gateStepText.textContent = `Gate step ${money(Math.max(currentMinStake * 2, currentSeed * currentProfitGatePercent))}`;
       el.growthFloorText.textContent = `Growth floor ${money(currentMinStake)}`;
       if (config.hasEnvToken) {

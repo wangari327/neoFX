@@ -38,6 +38,40 @@ function numberFrom(value, fallback) {
   return Number.isFinite(numeric) ? numeric : fallback;
 }
 
+function optionalNumberFrom(value, fallback = null) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function normalizeMilestoneList(value, fallback = [0.25, 0.5, 0.75]) {
+  const source = Array.isArray(value)
+    ? value
+    : String(value ?? '')
+      .split(/[,\s]+/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+  const parsed = source
+    .map((item) => {
+      const numeric = Number(item);
+      if (!Number.isFinite(numeric)) return null;
+      return Math.min(Math.max(numeric > 1 ? numeric / 100 : numeric, 0), 1);
+    })
+    .filter((item) => item !== null);
+
+  if (!parsed.length) return fallback.slice();
+
+  const deduped = [];
+  for (const milestone of parsed) {
+    if (!deduped.some((item) => Math.abs(item - milestone) < 1e-9)) {
+      deduped.push(milestone);
+    }
+  }
+
+  return deduped.sort((a, b) => a - b);
+}
+
 function basicAuthValid(headers) {
   const password = process.env.DASHBOARD_PASSWORD;
   if (!password) return true;
@@ -61,6 +95,12 @@ function requireBasicAuth(req, res, next) {
 }
 
 function publicConfig() {
+  const blindSniperStartRatio = numberFrom(process.env.BLIND_SNIPER_START_RATIO, 0.75);
+  const blindSniperMilestones = normalizeMilestoneList(
+    process.env.BLIND_SNIPER_MILESTONES,
+    [0.25, 0.5, blindSniperStartRatio]
+  );
+
   return {
     defaultMode: process.env.DEFAULT_MODE || 'demo',
     defaultSymbol: process.env.SYMBOL || 'R_100',
@@ -73,10 +113,13 @@ function publicConfig() {
     growthStakeCapPercent: numberFrom(process.env.GROWTH_STAKE_CAP_PERCENT, 0.12),
     profitGatePercent: numberFrom(process.env.PROFIT_GATE_PERCENT, 0.08),
     recoveryBufferPercent: numberFrom(process.env.RECOVERY_BUFFER_PERCENT, 0.05),
+    growthStairsEnabled: boolFrom(process.env.GROWTH_STAIRS_ENABLED, false),
+    initialStake: optionalNumberFrom(process.env.INITIAL_STAKE, null),
     blindSniperEnabled: boolFrom(process.env.BLIND_SNIPER_ENABLED, false),
     blindSniperCadenceTrades: numberFrom(process.env.BLIND_SNIPER_CADENCE_TRADES, 3),
     blindSniperMaxUses: numberFrom(process.env.BLIND_SNIPER_MAX_USES, 3),
-    blindSniperStartRatio: numberFrom(process.env.BLIND_SNIPER_START_RATIO, 0.75),
+    blindSniperStartRatio: blindSniperMilestones[blindSniperMilestones.length - 1] ?? blindSniperStartRatio,
+    blindSniperMilestones,
     blindSniperStakeFraction: numberFrom(process.env.BLIND_SNIPER_STAKE_FRACTION, 1 / 3),
     hasEnvToken: Boolean(
       process.env.DERIV_API_TOKEN ||
@@ -105,6 +148,17 @@ function sanitizeStartPayload(payload = {}) {
   const accountId = String(payload.accountId || process.env.DERIV_ACCOUNT_ID || '').trim();
   const appId = String(process.env.DERIV_APP_ID || '').trim();
   const apiBaseUrl = String(process.env.DERIV_API_BASE_URL || 'https://api.derivws.com').trim();
+  const envStartRatio = numberFrom(process.env.BLIND_SNIPER_START_RATIO, 0.75);
+  const defaultBlindSniperMilestones = normalizeMilestoneList(
+    process.env.BLIND_SNIPER_MILESTONES,
+    [0.25, 0.5, envStartRatio]
+  );
+  const payloadStartRatio = numberFrom(payload.blindSniperStartRatio, envStartRatio);
+  const blindSniperMilestones = normalizeMilestoneList(
+    payload.blindSniperMilestones ?? payload.blindSniperMarks,
+    defaultBlindSniperMilestones.length ? defaultBlindSniperMilestones : [0.25, 0.5, payloadStartRatio]
+  );
+  const blindSniperStartRatio = blindSniperMilestones[blindSniperMilestones.length - 1] ?? payloadStartRatio;
 
   if (seed < 1) throw new Error('Seed must be at least 1.00.');
   if (target <= seed) throw new Error('Target must be greater than seed.');
@@ -135,13 +189,16 @@ function sanitizeStartPayload(payload = {}) {
     growthStakeCapPercent: numberFrom(process.env.GROWTH_STAKE_CAP_PERCENT, 0.12),
     profitGatePercent: numberFrom(process.env.PROFIT_GATE_PERCENT, 0.08),
     recoveryBufferPercent: numberFrom(process.env.RECOVERY_BUFFER_PERCENT, 0.05),
+    growthStairsEnabled: boolFrom(payload.growthStairsEnabled, boolFrom(process.env.GROWTH_STAIRS_ENABLED, false)),
+    initialStake: optionalNumberFrom(payload.initialStake, optionalNumberFrom(process.env.INITIAL_STAKE, null)),
     windowSize: numberFrom(process.env.WINDOW_SIZE, 20),
     guideFilters: boolFrom(payload.guideFilters, boolFrom(process.env.GUIDE_FILTERS, false)),
     strictBarFilters: boolFrom(payload.strictBarFilters, boolFrom(process.env.STRICT_BAR_FILTERS, false)),
     blindSniperEnabled: boolFrom(payload.blindSniperEnabled, boolFrom(process.env.BLIND_SNIPER_ENABLED, false)),
     blindSniperCadenceTrades: numberFrom(payload.blindSniperCadenceTrades, numberFrom(process.env.BLIND_SNIPER_CADENCE_TRADES, 3)),
     blindSniperMaxUses: numberFrom(payload.blindSniperMaxUses, numberFrom(process.env.BLIND_SNIPER_MAX_USES, 3)),
-    blindSniperStartRatio: numberFrom(payload.blindSniperStartRatio, numberFrom(process.env.BLIND_SNIPER_START_RATIO, 0.75)),
+    blindSniperStartRatio,
+    blindSniperMilestones,
     blindSniperStakeFraction: numberFrom(payload.blindSniperStakeFraction, numberFrom(process.env.BLIND_SNIPER_STAKE_FRACTION, 1 / 3))
   };
 }
@@ -171,6 +228,17 @@ function summarizeRun(run, reason = run?.reason || 'manual') {
     growthStep: Number(run.growthStep ?? 0),
     growthFloor: Number(run.growthFloor ?? 0),
     gateStep: Number(run.gateStep ?? 0),
+    growthStairsEnabled: Boolean(snapshot.growthStairsEnabled ?? run.growthStairsEnabled ?? run.config?.growthStairsEnabled ?? false),
+    initialStake: snapshot.initialStake ?? run.initialStake ?? run.config?.initialStake ?? null,
+    initialStakeUsed: Boolean(snapshot.initialStakeUsed ?? run.initialStakeUsed ?? run.config?.initialStakeUsed ?? false),
+    martingaleLossStreak: Number(snapshot.martingaleLossStreak ?? run.martingaleLossStreak ?? 0),
+    martingaleRetryLimit: Number(snapshot.martingaleRetryLimit ?? run.martingaleRetryLimit ?? 2),
+    splitRecoveryArmed: Boolean(snapshot.splitRecoveryArmed ?? run.splitRecoveryArmed ?? run.config?.splitRecoveryArmed ?? false),
+    splitRecoveryReadyAtTrade: Number(snapshot.splitRecoveryReadyAtTrade ?? run.splitRecoveryReadyAtTrade ?? 0),
+    splitRecoveryPiecesRemaining: Number(snapshot.splitRecoveryPiecesRemaining ?? run.splitRecoveryPiecesRemaining ?? 0),
+    splitRecoveryCooldownTrades: Number(snapshot.splitRecoveryCooldownTrades ?? run.splitRecoveryCooldownTrades ?? 3),
+    splitRecoveryPieces: Number(snapshot.splitRecoveryPieces ?? run.splitRecoveryPieces ?? 2),
+    splitRecoveryCapPercent: Number(snapshot.splitRecoveryCapPercent ?? run.splitRecoveryCapPercent ?? 0.22),
     totalTrades,
     wins,
     losses,
@@ -178,7 +246,16 @@ function summarizeRun(run, reason = run?.reason || 'manual') {
     startingBalance: seed,
     finalBalance,
     netProfit: roundMoney(finalBalance - seed),
-    target: Number(run.target ?? run.config?.target ?? seed)
+    target: Number(run.target ?? run.config?.target ?? seed),
+    blindSniperEnabled: Boolean(snapshot.blindSniperEnabled ?? run.blindSniperEnabled ?? run.config?.blindSniperEnabled ?? false),
+    blindSniperUses: Number(snapshot.blindSniperUses ?? run.blindSniperUses ?? run.config?.blindSniperUses ?? 0),
+    blindSniperMaxUses: Number(snapshot.blindSniperMaxUses ?? run.blindSniperMaxUses ?? run.config?.blindSniperMaxUses ?? 3),
+    blindSniperMilestones: normalizeMilestoneList(
+      snapshot.blindSniperMilestones ?? run.blindSniperMilestones ?? run.config?.blindSniperMilestones ?? null,
+      [0.25, 0.5, Number(snapshot.blindSniperStartRatio ?? run.blindSniperStartRatio ?? run.config?.blindSniperStartRatio ?? 0.75)]
+    ),
+    blindSniperProgress: Number(snapshot.blindSniperProgress ?? run.blindSniperProgress ?? 0),
+    blindSniperNextMilestone: snapshot.blindSniperNextMilestone ?? run.blindSniperNextMilestone ?? null
   };
 }
 
@@ -250,16 +327,22 @@ function runBalanceState(run) {
   const blindSniperCadenceTrades = Number(snapshot.blindSniperCadenceTrades ?? run.blindSniperCadenceTrades ?? run.config?.blindSniperCadenceTrades ?? 3);
   const blindSniperMaxUses = Number(snapshot.blindSniperMaxUses ?? run.blindSniperMaxUses ?? run.config?.blindSniperMaxUses ?? 3);
   const blindSniperStartRatio = Number(snapshot.blindSniperStartRatio ?? run.blindSniperStartRatio ?? run.config?.blindSniperStartRatio ?? 0.75);
+  const blindSniperMilestones = normalizeMilestoneList(
+    snapshot.blindSniperMilestones ?? run.blindSniperMilestones ?? run.config?.blindSniperMilestones ?? null,
+    [0.25, 0.5, blindSniperStartRatio]
+  );
   const blindSniperStakeFraction = Number(snapshot.blindSniperStakeFraction ?? run.blindSniperStakeFraction ?? run.config?.blindSniperStakeFraction ?? 1 / 3);
   const blindSniperTradesSinceLastShot = Number(snapshot.blindSniperTradesSinceLastShot ?? run.blindSniperTradesSinceLastShot ?? run.config?.blindSniperTradesSinceLastShot ?? 0);
   const blindSniperProgress = Math.max(0, Math.min(1, (balance - seed) / Math.max(0.01, target - seed)));
-  const blindSniperUsesRemaining = Math.max(0, blindSniperMaxUses - blindSniperUses);
+  const blindSniperMilestoneIndex = Math.min(blindSniperUses, Math.max(0, blindSniperMilestones.length - 1));
+  const blindSniperNextMilestone = blindSniperMilestones[blindSniperMilestoneIndex] ?? blindSniperStartRatio;
+  const blindSniperUsesRemaining = Math.max(0, Math.min(blindSniperMaxUses, blindSniperMilestones.length) - blindSniperUses);
   const blindSniperTradesUntilShot = Math.max(0, blindSniperCadenceTrades - blindSniperTradesSinceLastShot);
   const blindSniperArmed =
     blindSniperEnabled &&
     !['martingale', 'rebuild', 'stopped'].includes(phase) &&
     blindSniperUsesRemaining > 0 &&
-    blindSniperProgress >= blindSniperStartRatio &&
+    blindSniperProgress >= blindSniperNextMilestone &&
     blindSniperTradesSinceLastShot >= blindSniperCadenceTrades;
   const blindSniperReason = !blindSniperEnabled
     ? 'disabled'
@@ -267,7 +350,7 @@ function runBalanceState(run) {
       ? 'quota_exhausted'
       : ['martingale', 'rebuild', 'stopped'].includes(phase)
         ? 'phase_blocked'
-        : blindSniperProgress < blindSniperStartRatio
+        : blindSniperProgress < blindSniperNextMilestone
           ? 'progress_wait'
           : blindSniperTradesSinceLastShot < blindSniperCadenceTrades
             ? 'cadence_wait'
@@ -292,6 +375,17 @@ function runBalanceState(run) {
     growthStep: Number(snapshot.growthStep ?? run.growthStep ?? 0),
     growthFloor: Number(snapshot.growthFloor ?? run.growthFloor ?? 0),
     gateStep: Number(snapshot.gateStep ?? run.gateStep ?? 0),
+    growthStairsEnabled: Boolean(snapshot.growthStairsEnabled ?? run.growthStairsEnabled ?? run.config?.growthStairsEnabled ?? false),
+    initialStake: snapshot.initialStake ?? run.initialStake ?? run.config?.initialStake ?? null,
+    initialStakeUsed: Boolean(snapshot.initialStakeUsed ?? run.initialStakeUsed ?? run.config?.initialStakeUsed ?? false),
+    martingaleLossStreak: Number(snapshot.martingaleLossStreak ?? run.martingaleLossStreak ?? 0),
+    martingaleRetryLimit: Number(snapshot.martingaleRetryLimit ?? run.martingaleRetryLimit ?? 2),
+    splitRecoveryArmed: Boolean(snapshot.splitRecoveryArmed ?? run.splitRecoveryArmed ?? false),
+    splitRecoveryReadyAtTrade: Number(snapshot.splitRecoveryReadyAtTrade ?? run.splitRecoveryReadyAtTrade ?? 0),
+    splitRecoveryPiecesRemaining: Number(snapshot.splitRecoveryPiecesRemaining ?? run.splitRecoveryPiecesRemaining ?? 0),
+    splitRecoveryCooldownTrades: Number(snapshot.splitRecoveryCooldownTrades ?? run.splitRecoveryCooldownTrades ?? 3),
+    splitRecoveryPieces: Number(snapshot.splitRecoveryPieces ?? run.splitRecoveryPieces ?? 2),
+    splitRecoveryCapPercent: Number(snapshot.splitRecoveryCapPercent ?? run.splitRecoveryCapPercent ?? 0.22),
     blindSniperEnabled,
     blindSniperUses,
     blindSniperUsesRemaining,
@@ -300,9 +394,11 @@ function runBalanceState(run) {
     blindSniperCadenceTrades,
     blindSniperMaxUses,
     blindSniperStartRatio,
+    blindSniperMilestones,
     blindSniperStakeFraction,
     blindSniperProgress,
     blindSniperArmed,
+    blindSniperNextMilestone,
     blindSniperReason
   };
 }
