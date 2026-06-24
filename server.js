@@ -17,11 +17,15 @@ const PORT = Number(process.env.PORT || 3000);
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const RUN_HISTORY_LIMIT = 12;
 
+function configuredMongoUrl() {
+  return String(process.env.MONGODB_URL || process.env.MONGO_URL || '').trim();
+}
+
 let runStore = createRunStore({
-  mongoUrl: process.env.MONGODB_URL || process.env.MONGO_URL || '',
+  mongoUrl: configuredMongoUrl(),
   dbName: process.env.MONGODB_DB || process.env.MONGO_DB || 'deriv_digit_bot'
 });
-let persistenceBackend = process.env.MONGODB_URL || process.env.MONGO_URL ? 'mongo' : 'memory';
+let persistenceBackend = configuredMongoUrl() ? 'mongo' : 'memory';
 let activeBot = null;
 let activeRun = null;
 let recentRunsCache = [];
@@ -486,7 +490,7 @@ async function persistRunState(bot, { eventType = null, payload = {}, appendEven
 async function initializePersistence() {
   try {
     await runStore.connect();
-    persistenceBackend = process.env.MONGODB_URL || process.env.MONGO_URL ? 'mongo' : 'memory';
+    persistenceBackend = configuredMongoUrl() ? 'mongo' : 'memory';
   } catch (error) {
     const hint = persistenceHint(error);
     console.warn(`Persistence store unavailable (${hint}). Falling back to in-memory history.`);
