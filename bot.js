@@ -711,7 +711,7 @@ class DerivDigitBot extends EventEmitter {
       currency: this.options.currency,
       duration: this.options.duration,
       duration_unit: this.options.durationUnit,
-      symbol: this.options.symbol,
+      underlying_symbol: this.options.symbol,
       barrier: condition.barrier
     });
 
