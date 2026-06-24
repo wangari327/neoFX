@@ -561,26 +561,25 @@ class DerivDigitBot extends EventEmitter {
   }
 
   growthStakeFloor() {
-    const floors = [this.options.minStake];
-
-    if (Number.isFinite(this.options.initialStake) && this.options.initialStake !== null) {
-      floors.push(this.options.initialStake);
-    }
+    const baseFloor = Number.isFinite(this.options.initialStake) && this.options.initialStake !== null
+      ? Math.max(this.options.minStake, this.options.initialStake)
+      : this.options.minStake;
+    const floors = [baseFloor];
 
     if (this.options.growthStairsEnabled) {
       const tier = this.growthTier();
-      floors.push(roundMoney(this.options.minStake * (1 + tier * this.options.growthStakeBumpPercent)));
+      floors.push(roundMoney(baseFloor * (1 + tier * this.options.growthStakeBumpPercent)));
     }
 
     return roundMoney(Math.max(...floors));
   }
 
   growthStake() {
-    const rawStake = Math.max(
-      this.effectiveGrowthBalance() * this.options.baseStakePercent,
-      this.growthStakeFloor()
-    );
-    return this.normalizeStake(rawStake, this.options.growthStakeCapPercent);
+    const floor = this.growthStakeFloor();
+    const rawStake = Math.max(this.effectiveGrowthBalance() * this.options.baseStakePercent, floor);
+    const floorCapPercent = Math.min(1, floor / Math.max(this.balance, this.options.minStake));
+    const capPercent = Math.max(this.options.growthStakeCapPercent, floorCapPercent);
+    return this.normalizeStake(rawStake, capPercent);
   }
 
   progressRatio() {
@@ -609,7 +608,7 @@ class DerivDigitBot extends EventEmitter {
   }
 
   effectiveGrowthBalance() {
-    return roundMoney(this.balance - this.sniperOverlayNet);
+    return roundMoney(this.balance);
   }
 
   currentRecoveryDebt() {
@@ -623,11 +622,12 @@ class DerivDigitBot extends EventEmitter {
       ? this.options.blindSniperMilestones
       : [this.options.blindSniperStartRatio];
     const maxUses = Math.max(1, milestones.length);
-    const milestoneIndex = this.syncBlindSniperCursor(progress);
+    const progressStage = this.syncBlindSniperCursor(progress);
+    const milestoneIndex = Math.min(this.blindSniperUses, milestones.length);
     const usesRemaining = Math.max(0, maxUses - this.blindSniperUses);
     const tradesUntilShot = Math.max(0, this.options.blindSniperCadenceTrades - this.tradesSinceBlindSniper);
     const phaseReady = ![PHASES.MARTINGALE, PHASES.REBUILD, PHASES.STOPPED].includes(this.phase) && !this.splitRecoveryArmed;
-    const nextMilestone = milestones[milestoneIndex] ?? null;
+    const nextMilestone = milestoneIndex < milestones.length ? milestones[milestoneIndex] : null;
     const armed =
       enabled &&
       phaseReady &&
@@ -660,6 +660,7 @@ class DerivDigitBot extends EventEmitter {
       usesRemaining,
       milestones,
       milestoneIndex,
+      progressStage,
       nextMilestone,
       cadenceTrades: this.options.blindSniperCadenceTrades,
       tradesSinceLastShot: this.tradesSinceBlindSniper,
@@ -1003,7 +1004,7 @@ class DerivDigitBot extends EventEmitter {
             ? 'Blind sniper waits for the staged recovery to finish.'
           : sniperState.reason === 'progress_wait'
             ? `Blind sniper waits for ${sniperProgress}% progress to target.`
-            : `Blind sniper waits for ${sniperState.tradesUntilShot} more trade(s).`;
+            : `Blind sniper cooldown, ${sniperState.tradesUntilShot} trade(s) until the next shot.`;
       this.emitAnalysis('blind_sniper_waiting', reasonText, { plan: { kind: PHASES.BLIND_SNIPER } });
     }
 
@@ -1226,7 +1227,7 @@ class DerivDigitBot extends EventEmitter {
       `stake=${tradeEvent.stake.toFixed(2)} result=${tradeEvent.result} ` +
       `profit=${tradeEvent.profit.toFixed(2)} balance=${tradeEvent.balance.toFixed(2)} ` +
       `phase=${tradeEvent.phase} plan=${tradeEvent.plan} tier=${tradeEvent.growthTier} ` +
-      `growth_balance=${tradeEvent.effectiveGrowthBalance.toFixed(2)} overlay=${tradeEvent.sniperOverlayNet.toFixed(2)} ` +
+      `session_balance=${tradeEvent.effectiveGrowthBalance.toFixed(2)} overlay=${tradeEvent.sniperOverlayNet.toFixed(2)} ` +
       `growth_floor=${tradeEvent.growthFloor.toFixed(2)} floor=${this.riskFloor.toFixed(2)} debt=${this.currentRecoveryDebt().toFixed(2)} ` +
       `martingale_streak=${this.martingaleLossStreak} ` +
       `split_recovery=${this.splitRecoveryArmed ? 'on' : 'off'} ` +
@@ -1359,7 +1360,7 @@ class DerivDigitBot extends EventEmitter {
     const payload = this.phasePayload(previous, nextPhase, reason);
     console.log(
       `${new Date().toISOString()} phase_change ${previous} -> ${nextPhase} ` +
-      `reason=${reason} balance=${this.balance.toFixed(2)} growth_balance=${this.effectiveGrowthBalance().toFixed(2)} tier=${this.growthTier()} ` +
+      `reason=${reason} balance=${this.balance.toFixed(2)} session_balance=${this.effectiveGrowthBalance().toFixed(2)} tier=${this.growthTier()} ` +
       `floor=${this.riskFloor.toFixed(2)} debt=${this.currentRecoveryDebt().toFixed(2)}`
     );
     this.emit('phase_change', payload);
@@ -1692,8 +1693,7 @@ class DerivDigitBot extends EventEmitter {
       finalBalance: this.balance,
       netProfit: roundMoney(this.balance - this.options.seed),
       target: this.options.target,
-      blindSniperMaxUses: Math.max(1, Array.isArray(this.options.blindSniperMilestones) ? this.options.blindSniperMilestones.length : 0),
-      blindSniperProgress: this.sessionProgressRatio()
+      blindSniperMaxUses: Math.max(1, Array.isArray(this.options.blindSniperMilestones) ? this.options.blindSniperMilestones.length : 0)
     };
   }
 

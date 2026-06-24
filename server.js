@@ -267,7 +267,7 @@ function summarizeRun(run, reason = run?.reason || 'manual') {
       -1,
       Math.min(
         1,
-        (Number(snapshot.effectiveGrowthBalance ?? run.effectiveGrowthBalance ?? finalBalance) - seed) /
+        (finalBalance - seed) /
           Math.max(0.01, Number(run.target ?? run.config?.target ?? seed) - seed)
       )
     ),
@@ -349,9 +349,8 @@ function runBalanceState(run) {
   const blindSniperMaxUses = blindSniperLimit(blindSniperMilestones);
   const blindSniperStakeFraction = Number(snapshot.blindSniperStakeFraction ?? run.blindSniperStakeFraction ?? run.config?.blindSniperStakeFraction ?? 1 / 3);
   const blindSniperTradesSinceLastShot = Number(snapshot.blindSniperTradesSinceLastShot ?? run.blindSniperTradesSinceLastShot ?? run.config?.blindSniperTradesSinceLastShot ?? 0);
-  const effectiveGrowthBalance = Number(snapshot.effectiveGrowthBalance ?? run.effectiveGrowthBalance ?? balance);
-  const blindSniperProgress = Math.max(-1, Math.min(1, (effectiveGrowthBalance - seed) / Math.max(0.01, target - seed)));
-  const blindSniperMilestoneIndex = blindSniperMilestones.filter((milestone) => blindSniperProgress >= milestone).length;
+  const blindSniperProgress = Math.max(-1, Math.min(1, (balance - seed) / Math.max(0.01, target - seed)));
+  const blindSniperMilestoneIndex = Math.min(blindSniperUses, blindSniperMilestones.length);
   const blindSniperNextMilestone = blindSniperMilestoneIndex < blindSniperMilestones.length
     ? blindSniperMilestones[blindSniperMilestoneIndex]
     : null;

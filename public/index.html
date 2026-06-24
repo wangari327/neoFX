@@ -50,33 +50,33 @@
       align-items: center;
       justify-content: space-between;
       gap: 16px;
-      margin-bottom: 12px;
+      margin-bottom: 10px;
     }
 
     .topbar-right {
       display: flex;
       align-items: center;
       justify-content: flex-end;
-      gap: 10px;
+      gap: 8px;
       flex-wrap: wrap;
     }
 
     h1 {
       margin: 0;
-      font-size: 24px;
+      font-size: 22px;
       line-height: 1.2;
       font-weight: 700;
     }
 
     .status-pill {
-      min-width: 112px;
+      min-width: 96px;
       text-align: center;
       border: 1px solid var(--line);
       background: var(--panel);
       color: var(--muted);
       border-radius: 999px;
-      padding: 7px 13px;
-      font-size: 12px;
+      padding: 6px 10px;
+      font-size: 11px;
       text-transform: uppercase;
       letter-spacing: 0.04em;
     }
@@ -84,24 +84,24 @@
     .toolbar {
       display: flex;
       align-items: center;
-      gap: 8px;
-      padding: 4px;
+      gap: 6px;
+      padding: 3px;
       border: 1px solid var(--line);
-      border-radius: 12px;
+      border-radius: 999px;
       background: rgba(12, 14, 14, 0.7);
       box-shadow: 0 1px 0 rgba(255, 255, 255, 0.02) inset;
     }
 
     .icon-btn {
-      width: 38px;
-      height: 38px;
-      min-height: 38px;
+      width: 32px;
+      height: 32px;
+      min-height: 32px;
       padding: 0;
       display: inline-flex;
       align-items: center;
       justify-content: center;
       border: 1px solid var(--line);
-      border-radius: 9px;
+      border-radius: 50%;
       background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(0, 0, 0, 0.12));
       color: var(--muted);
       box-shadow: 0 1px 0 rgba(255, 255, 255, 0.02) inset;
@@ -120,25 +120,33 @@
     }
 
     .icon-btn svg {
-      width: 17px;
-      height: 17px;
+      width: 14px;
+      height: 14px;
       fill: currentColor;
       stroke: none;
     }
 
     .icon-btn.start {
+      background: rgba(72, 199, 116, 0.14);
+      border-color: rgba(72, 199, 116, 0.28);
       color: var(--green);
     }
 
     .icon-btn.pause {
+      background: rgba(244, 197, 66, 0.16);
+      border-color: rgba(244, 197, 66, 0.28);
       color: var(--yellow);
     }
 
     .icon-btn.resume {
+      background: rgba(73, 182, 214, 0.16);
+      border-color: rgba(73, 182, 214, 0.28);
       color: var(--cyan);
     }
 
     .icon-btn.stop {
+      background: rgba(255, 95, 87, 0.16);
+      border-color: rgba(255, 95, 87, 0.28);
       color: var(--red);
     }
 
@@ -333,20 +341,23 @@
       background: transparent;
       color: var(--text);
       border: 1px solid var(--line);
-      min-height: 34px;
-      padding: 8px 12px;
+      min-height: 30px;
+      padding: 6px 10px;
       font-weight: 700;
+      font-size: 12px;
     }
 
     .stats {
       display: grid;
       grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 1px;
+      background: var(--line);
       border-bottom: 1px solid var(--line);
     }
 
     .stat {
-      padding: 12px 14px;
-      border-right: 1px solid var(--line);
+      padding: 8px 10px;
+      background: linear-gradient(180deg, #1a1c1c, #171919);
       min-width: 0;
     }
 
@@ -357,14 +368,14 @@
     .stat span {
       display: block;
       color: var(--muted);
-      font-size: 12px;
-      margin-bottom: 6px;
+      font-size: 10px;
+      margin-bottom: 4px;
       text-transform: uppercase;
     }
 
     .stat strong {
       display: block;
-      font-size: 22px;
+      font-size: 18px;
       line-height: 1.1;
       white-space: nowrap;
       overflow: hidden;
@@ -372,7 +383,7 @@
     }
 
     .progress-wrap {
-      padding: 13px 14px 15px;
+      padding: 10px 12px 12px;
       border-bottom: 1px solid var(--line);
       background: var(--panel-2);
     }
@@ -381,21 +392,21 @@
       display: flex;
       align-items: flex-end;
       justify-content: space-between;
-      gap: 14px;
-      margin-bottom: 14px;
+      gap: 10px;
+      margin-bottom: 10px;
     }
 
     .equity-label {
       display: block;
       color: var(--muted);
-      font-size: 12px;
+      font-size: 10px;
       margin-bottom: 4px;
       text-transform: uppercase;
       letter-spacing: 0;
     }
 
     .equity-value {
-      font-size: 30px;
+      font-size: 24px;
       line-height: 1;
       font-weight: 800;
       letter-spacing: 0;
@@ -403,19 +414,19 @@
     }
 
     .equity-delta {
-      min-width: 136px;
+      min-width: 112px;
       align-self: stretch;
       display: flex;
       align-items: center;
       justify-content: center;
       text-align: center;
       border: 1px solid var(--line);
-      border-radius: 8px;
+      border-radius: 999px;
       background: #0d0f0f;
       color: var(--muted);
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 800;
-      padding: 10px 12px;
+      padding: 8px 10px;
       transition: color 180ms ease, border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
     }
 
@@ -437,7 +448,7 @@
 
     .equity-rail {
       position: relative;
-      height: 18px;
+      height: 14px;
       background: #0a0c0c;
       border: 1px solid var(--line);
       border-radius: 999px;
@@ -464,8 +475,8 @@
       position: absolute;
       top: 50%;
       left: 0%;
-      width: 16px;
-      height: 16px;
+      width: 14px;
+      height: 14px;
       transform: translate(-50%, -50%);
       border-radius: 50%;
       border: 2px solid #f3f0e8;
@@ -488,9 +499,9 @@
       display: flex;
       justify-content: space-between;
       gap: 12px;
-      margin-top: 10px;
+      margin-top: 8px;
       color: var(--muted);
-      font-size: 12px;
+      font-size: 11px;
     }
 
     .gate-meta {
@@ -498,19 +509,23 @@
       justify-content: space-between;
       gap: 12px;
       flex-wrap: wrap;
-      margin-top: 10px;
+      margin-top: 8px;
       color: var(--muted);
-      font-size: 12px;
-      line-height: 1.35;
+      font-size: 11px;
+      line-height: 1.2;
     }
 
     .gate-meta span {
       min-width: 0;
+      padding: 4px 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #101313;
     }
 
     .sparkline-wrap {
-      margin-top: 14px;
-      padding: 10px 12px 12px;
+      margin-top: 12px;
+      padding: 8px 10px 10px;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: linear-gradient(180deg, #121414, #0c0d0d);
@@ -521,16 +536,16 @@
       align-items: center;
       justify-content: space-between;
       gap: 12px;
-      margin-bottom: 8px;
+      margin-bottom: 6px;
       color: var(--muted);
-      font-size: 12px;
+      font-size: 11px;
       text-transform: uppercase;
       letter-spacing: 0;
     }
 
     canvas.sparkline {
       width: 100%;
-      height: 120px;
+      height: 72px;
       display: block;
     }
 
@@ -540,7 +555,7 @@
       align-items: center;
       justify-content: space-between;
       gap: 12px;
-      padding: 10px 14px 9px;
+      padding: 8px 12px;
       border-top: 1px solid var(--line);
       background: var(--panel-2);
     }
@@ -556,7 +571,7 @@
 
     .table-subtitle {
       display: block;
-      font-size: 15px;
+      font-size: 14px;
       font-weight: 700;
     }
 
@@ -568,9 +583,9 @@
 
     .banner {
       display: none;
-      margin-bottom: 14px;
+      margin-bottom: 12px;
       border-radius: 8px;
-      padding: 14px 16px;
+      padding: 10px 12px;
       font-weight: 800;
       border: 1px solid transparent;
     }
@@ -681,7 +696,7 @@
       }
 
       .stat {
-        border-bottom: 1px solid var(--line);
+        border-bottom: 0;
       }
     }
 
@@ -1176,7 +1191,7 @@
       if (reason === 'progress_wait') return progressPct < 0
         ? `Blind sniper waiting recovery at ${nextPct}%+`
         : `Blind sniper waiting for ${nextPct}%+`;
-      if (reason === 'cadence_wait') return `Blind sniper ready, ${tradesUntilShot} trade(s) away`;
+      if (reason === 'cadence_wait') return `Blind sniper cooldown, ${tradesUntilShot} trade(s) until the next shot`;
       if (reason === 'recovery_blocked') return 'Blind sniper waiting for split recovery to clear';
       if (reason === 'phase_blocked') return 'Blind sniper waiting for an offensive phase';
       if (reason === 'disabled') return 'Blind sniper off';
@@ -1661,7 +1676,7 @@
       el.growthTierText.textContent = 'Growth tier 0';
       el.growthFloorText.textContent = `Growth floor ${money(currentMinStake)}`;
       el.sniperText.textContent = 'Blind sniper off';
-      el.progressMarker.title = `Growth balance ${money(currentSeed)} (0.0%)`;
+      el.progressMarker.title = `Session equity ${money(currentSeed)} (0.0%)`;
       el.lastTradeText.textContent = 'Warming up...';
       el.lastTradeText.style.color = 'var(--muted)';
       drawEquityChart();
@@ -1797,7 +1812,7 @@
       el.progressText.textContent = `${pct.toFixed(1)}%`;
       el.progressStart.textContent = money(currentSeed);
       el.progressTarget.textContent = money(currentTarget);
-      el.progressMarker.title = `Growth balance ${money(next)} (${pct.toFixed(1)}%)`;
+      el.progressMarker.title = `Session equity ${money(next)} (${pct.toFixed(1)}%)`;
     }
 
     function updateStats(event, tradeDelta, source) {
@@ -1883,7 +1898,7 @@
           ? 'linear-gradient(90deg, rgba(72, 199, 116, 0.92), rgba(73, 182, 214, 0.92))'
           : 'linear-gradient(90deg, rgba(255, 95, 87, 0.92), rgba(244, 197, 66, 0.88))';
         el.progressText.textContent = `${growthProgress.toFixed(1)}%`;
-        el.progressMarker.title = `Growth balance ${money(growthBalance)} (${growthProgress.toFixed(1)}%)`;
+        el.progressMarker.title = `Session equity ${money(growthBalance)} (${growthProgress.toFixed(1)}%)`;
       }
 
       el.recoveryText.textContent = splitRecoveryArmed
