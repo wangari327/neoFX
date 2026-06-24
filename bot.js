@@ -108,9 +108,9 @@ async function requestJson(url, options = {}) {
       payload?.message ||
       `Deriv request failed with status ${response.status}.`;
     const message = response.status === 401
-      ? 'Deriv rejected the authorization token. Check DERIV_API_TOKEN and make sure it has trade scope.'
+      ? 'Deriv rejected the authorization token or App ID. Check DERIV_API_TOKEN, DERIV_APP_ID, and make sure the PAT app type matches the token type.'
       : response.status === 403
-        ? 'Deriv denied access. Check the token permissions and account access.'
+        ? 'Deriv denied access. Check the token scopes, App ID, and account access.'
         : fallbackMessage;
     throw new Error(message);
   }
