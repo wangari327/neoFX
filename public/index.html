@@ -1,0 +1,1034 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Deriv Digit Bot</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101111;
+      --panel: #191b1b;
+      --panel-2: #202323;
+      --text: #f3f0e8;
+      --muted: #a8aaa2;
+      --line: #333735;
+      --green: #48c774;
+      --red: #ff5f57;
+      --yellow: #f4c542;
+      --cyan: #49b6d6;
+      --field: #0d0f0f;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Arial, Helvetica, sans-serif;
+      letter-spacing: 0;
+    }
+
+    button,
+    input,
+    select {
+      font: inherit;
+    }
+
+    .app {
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 24px 0;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 24px;
+      line-height: 1.2;
+      font-weight: 700;
+    }
+
+    .status-pill {
+      min-width: 112px;
+      text-align: center;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--muted);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 13px;
+      text-transform: uppercase;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 340px 1fr;
+      gap: 18px;
+      align-items: start;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      overflow: hidden;
+    }
+
+    .controls {
+      padding: 16px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .field {
+      display: grid;
+      gap: 7px;
+    }
+
+    .field-help {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+      margin-top: -2px;
+    }
+
+    label {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    input,
+    select {
+      width: 100%;
+      min-height: 42px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--field);
+      color: var(--text);
+      padding: 10px 12px;
+      outline: none;
+    }
+
+    input:focus,
+    select:focus {
+      border-color: var(--cyan);
+    }
+
+    .inline {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .switch-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 36px;
+      border-top: 1px solid var(--line);
+      padding-top: 12px;
+    }
+
+    .switch-row input {
+      width: 20px;
+      min-height: 20px;
+      accent-color: var(--cyan);
+    }
+
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 4px;
+    }
+
+    button {
+      min-height: 46px;
+      border: 0;
+      border-radius: 8px;
+      color: #07100b;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.45;
+    }
+
+    .start {
+      background: var(--green);
+    }
+
+    .stop {
+      background: var(--red);
+      color: #180808;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      border-bottom: 1px solid var(--line);
+    }
+
+    .stat {
+      padding: 16px;
+      border-right: 1px solid var(--line);
+      min-width: 0;
+    }
+
+    .stat:last-child {
+      border-right: 0;
+    }
+
+    .stat span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+    }
+
+    .stat strong {
+      display: block;
+      font-size: 22px;
+      line-height: 1.1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .progress-wrap {
+      padding: 16px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel-2);
+    }
+
+    .equity-head {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 14px;
+    }
+
+    .equity-label {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+
+    .equity-value {
+      font-size: 30px;
+      line-height: 1;
+      font-weight: 800;
+      letter-spacing: 0;
+      white-space: nowrap;
+    }
+
+    .equity-delta {
+      min-width: 136px;
+      align-self: stretch;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0d0f0f;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 800;
+      padding: 10px 12px;
+      transition: color 180ms ease, border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+    }
+
+    .equity-delta.win {
+      color: var(--green);
+      border-color: rgba(72, 199, 116, 0.45);
+      box-shadow: 0 0 0 1px rgba(72, 199, 116, 0.08) inset;
+    }
+
+    .equity-delta.loss {
+      color: var(--red);
+      border-color: rgba(255, 95, 87, 0.45);
+      box-shadow: 0 0 0 1px rgba(255, 95, 87, 0.08) inset;
+    }
+
+    .equity-delta.pulse {
+      transform: scale(1.01);
+    }
+
+    .equity-rail {
+      position: relative;
+      height: 18px;
+      background: #0a0c0c;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    .progress-meta {
+      display: flex;
+      justify-content: space-between;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+
+    .progress {
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 0%;
+      background: linear-gradient(90deg, rgba(73, 182, 214, 0.92), rgba(72, 199, 116, 0.92));
+      transition: width 220ms ease, background 220ms ease;
+    }
+
+    .progress-marker {
+      position: absolute;
+      top: 50%;
+      left: 0%;
+      width: 16px;
+      height: 16px;
+      transform: translate(-50%, -50%);
+      border-radius: 50%;
+      border: 2px solid #f3f0e8;
+      background: var(--cyan);
+      box-shadow: 0 0 0 4px rgba(73, 182, 214, 0.12);
+      transition: left 220ms ease, background 220ms ease, box-shadow 220ms ease, transform 220ms ease;
+    }
+
+    .progress-marker.win {
+      background: var(--green);
+      box-shadow: 0 0 0 4px rgba(72, 199, 116, 0.12);
+    }
+
+    .progress-marker.loss {
+      background: var(--red);
+      box-shadow: 0 0 0 4px rgba(255, 95, 87, 0.12);
+    }
+
+    .rail-legend {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .sparkline-wrap {
+      margin-top: 14px;
+      padding: 10px 12px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: linear-gradient(180deg, #121414, #0c0d0d);
+    }
+
+    .sparkline-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+
+    canvas.sparkline {
+      width: 100%;
+      height: 120px;
+      display: block;
+    }
+
+    .banner {
+      display: none;
+      margin-bottom: 14px;
+      border-radius: 8px;
+      padding: 14px 16px;
+      font-weight: 800;
+      border: 1px solid transparent;
+    }
+
+    .banner.success {
+      display: block;
+      color: #092313;
+      background: var(--green);
+    }
+
+    .banner.danger {
+      display: block;
+      color: #2a0806;
+      background: var(--red);
+    }
+
+    .banner.warn {
+      display: block;
+      color: #241a04;
+      background: var(--yellow);
+    }
+
+    .table-wrap {
+      max-height: 520px;
+      overflow: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    thead {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: #151717;
+    }
+
+    th,
+    td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+
+    tr.win td {
+      color: var(--green);
+    }
+
+    tr.loss td {
+      color: var(--red);
+    }
+
+    tr.phase td {
+      color: var(--yellow);
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    @keyframes pulse {
+      0% { transform: scale(1); }
+      45% { transform: scale(1.015); }
+      100% { transform: scale(1); }
+    }
+
+    .pulse {
+      animation: pulse 420ms ease;
+    }
+
+    @media (max-width: 900px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      .stats {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .stat {
+        border-bottom: 1px solid var(--line);
+      }
+    }
+
+    @media (max-width: 560px) {
+      .app {
+        width: min(100% - 20px, 1180px);
+        padding: 14px 0;
+      }
+
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .inline,
+      .actions,
+      .stats {
+        grid-template-columns: 1fr;
+      }
+
+      .stat {
+        border-right: 0;
+      }
+
+      .equity-head {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .equity-delta {
+        min-width: 0;
+        width: 100%;
+      }
+
+      th,
+      td {
+        padding: 9px 10px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <div class="topbar">
+      <h1>Deriv Digit Bot</h1>
+      <div id="statusPill" class="status-pill">Idle</div>
+    </div>
+
+    <div id="banner" class="banner"></div>
+
+    <section class="layout">
+      <aside class="panel controls">
+        <div class="field">
+          <label for="token">Deriv API Token</label>
+          <input id="token" type="password" autocomplete="off" placeholder="Leave blank to use .env token">
+          <div id="tokenHelp" class="field-help">Store demo and real tokens in <code>.env</code> or paste one here for a single run.</div>
+        </div>
+
+        <div class="inline">
+          <div class="field">
+            <label for="seed">Seed</label>
+            <input id="seed" type="number" min="1" step="0.01" value="10">
+          </div>
+          <div class="field">
+            <label for="target">Target</label>
+            <input id="target" type="number" min="1" step="0.01" value="50">
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="mode">Mode</label>
+          <select id="mode">
+            <option value="demo">Deriv Demo</option>
+            <option value="real">Deriv Real</option>
+          </select>
+        </div>
+
+        <div class="switch-row">
+          <label for="guideFilters">Guide filters</label>
+          <input id="guideFilters" type="checkbox" checked>
+        </div>
+
+        <div class="switch-row">
+          <label for="strictBars">Strict bars</label>
+          <input id="strictBars" type="checkbox">
+        </div>
+
+        <div class="actions">
+          <button id="startBtn" class="start">START</button>
+          <button id="stopBtn" class="stop" disabled>STOP</button>
+        </div>
+      </aside>
+
+      <section class="panel">
+        <div class="stats">
+          <div class="stat"><span>Current Balance</span><strong id="balance">$0.00</strong></div>
+          <div class="stat"><span>Current Phase</span><strong id="phase">Idle</strong></div>
+          <div class="stat"><span>Total Trades</span><strong id="trades">0</strong></div>
+          <div class="stat"><span>Win Rate</span><strong id="winRate">0%</strong></div>
+          <div class="stat"><span>Profit/Loss</span><strong id="profitLoss">$0.00</strong></div>
+        </div>
+
+        <div class="progress-wrap">
+          <div class="equity-head">
+            <div>
+              <span class="equity-label">Session Equity</span>
+              <div id="equityValue" class="equity-value">$0.00</div>
+            </div>
+            <div id="equityDelta" class="equity-delta">+$0.00</div>
+          </div>
+
+          <div class="equity-rail" id="equityRail">
+            <div id="progressBar" class="progress"></div>
+            <div id="progressMarker" class="progress-marker" title="Current balance"></div>
+          </div>
+
+          <div class="rail-legend">
+            <span id="progressStart">$0.00</span>
+            <span id="progressText">0%</span>
+            <span id="progressTarget">$0.00</span>
+          </div>
+
+          <div class="sparkline-wrap">
+            <div class="sparkline-head">
+              <span>Balance Trail</span>
+              <span id="lastTradeText">Waiting for first trade</span>
+            </div>
+            <canvas id="equityChart" class="sparkline" width="100" height="120"></canvas>
+          </div>
+        </div>
+
+        <div class="table-wrap" id="tableWrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Digit</th>
+                <th>Condition</th>
+                <th>Stake</th>
+                <th>P/L</th>
+                <th>Result</th>
+                <th>Balance</th>
+                <th>Phase</th>
+              </tr>
+            </thead>
+            <tbody id="logBody">
+              <tr><td colspan="8" class="muted">No trades yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+
+    const el = {
+      token: document.getElementById('token'),
+      seed: document.getElementById('seed'),
+      target: document.getElementById('target'),
+      mode: document.getElementById('mode'),
+      guideFilters: document.getElementById('guideFilters'),
+      strictBars: document.getElementById('strictBars'),
+      startBtn: document.getElementById('startBtn'),
+      stopBtn: document.getElementById('stopBtn'),
+      statusPill: document.getElementById('statusPill'),
+      banner: document.getElementById('banner'),
+      balance: document.getElementById('balance'),
+      phase: document.getElementById('phase'),
+      trades: document.getElementById('trades'),
+      winRate: document.getElementById('winRate'),
+      profitLoss: document.getElementById('profitLoss'),
+      progressStart: document.getElementById('progressStart'),
+      progressText: document.getElementById('progressText'),
+      progressTarget: document.getElementById('progressTarget'),
+      progressBar: document.getElementById('progressBar'),
+      progressMarker: document.getElementById('progressMarker'),
+      equityValue: document.getElementById('equityValue'),
+      equityDelta: document.getElementById('equityDelta'),
+      equityChart: document.getElementById('equityChart'),
+      lastTradeText: document.getElementById('lastTradeText'),
+      tokenHelp: document.getElementById('tokenHelp'),
+      logBody: document.getElementById('logBody'),
+      tableWrap: document.getElementById('tableWrap')
+    };
+
+    let logStarted = false;
+    let currentSeed = Number(el.seed.value);
+    let currentTarget = Number(el.target.value);
+    let equityHistory = [currentSeed];
+    let lastSeriesBalance = currentSeed;
+    let lastRenderedBalance = currentSeed;
+    let lastRenderedTrades = 0;
+
+    function money(value) {
+      return `$${Number(value || 0).toFixed(2)}`;
+    }
+
+    function signedMoney(value) {
+      const amount = Number(value || 0);
+      const prefix = amount >= 0 ? '+' : '-';
+      return `${prefix}${money(Math.abs(amount))}`;
+    }
+
+    function phaseName(value) {
+      return String(value || 'idle').replace(/_/g, ' ');
+    }
+
+    function showBanner(type, text) {
+      el.banner.className = `banner ${type}`;
+      el.banner.textContent = text;
+    }
+
+    function clearBanner() {
+      el.banner.className = 'banner';
+      el.banner.textContent = '';
+    }
+
+    function setRunning(running) {
+      el.startBtn.disabled = running;
+      el.stopBtn.disabled = !running;
+      el.statusPill.textContent = running ? 'Running' : 'Idle';
+    }
+
+    function resetLog() {
+      logStarted = false;
+      el.logBody.innerHTML = '<tr><td colspan="8" class="muted">No trades yet.</td></tr>';
+    }
+
+    function ensureLogStarted() {
+      if (logStarted) return;
+      el.logBody.innerHTML = '';
+      logStarted = true;
+    }
+
+    function resetEquityTrail() {
+      equityHistory = [currentSeed];
+      lastSeriesBalance = currentSeed;
+      lastRenderedBalance = currentSeed;
+      lastRenderedTrades = 0;
+      el.equityValue.textContent = money(currentSeed);
+      el.equityDelta.textContent = '+$0.00';
+      el.equityDelta.classList.remove('win', 'loss', 'pulse');
+      el.profitLoss.textContent = '+$0.00';
+      el.profitLoss.style.color = 'var(--muted)';
+      el.profitLoss.classList.remove('pulse');
+      el.progressBar.style.width = '0%';
+      el.progressMarker.style.left = '0%';
+      el.progressMarker.classList.remove('win', 'loss');
+      el.progressStart.textContent = money(currentSeed);
+      el.progressTarget.textContent = money(currentTarget);
+      el.progressText.textContent = '0.0%';
+      el.progressMarker.title = `Current balance ${money(currentSeed)}`;
+      el.lastTradeText.textContent = 'Waiting for first trade';
+      el.lastTradeText.style.color = 'var(--muted)';
+      drawEquityChart();
+    }
+
+    function flashNode(node, className) {
+      if (!node) return;
+      node.classList.remove('pulse', 'win', 'loss');
+      void node.offsetWidth;
+      if (className) node.classList.add(className);
+      node.classList.add('pulse');
+      window.setTimeout(() => {
+        node.classList.remove('pulse', 'win', 'loss');
+      }, 450);
+    }
+
+    function drawEquityChart() {
+      const canvas = el.equityChart;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      const dpr = window.devicePixelRatio || 1;
+      const width = Math.max(1, Math.floor(canvas.clientWidth));
+      const height = Math.max(1, Math.floor(canvas.clientHeight));
+
+      if (canvas.width !== Math.floor(width * dpr) || canvas.height !== Math.floor(height * dpr)) {
+        canvas.width = Math.floor(width * dpr);
+        canvas.height = Math.floor(height * dpr);
+      }
+
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, width, height);
+
+      const trail = equityHistory.length > 1 ? equityHistory.slice() : [currentSeed, lastRenderedBalance];
+      const min = Math.min(...trail, currentSeed, currentTarget);
+      const max = Math.max(...trail, currentSeed, currentTarget);
+      const padding = Math.max(0.25, (max - min) * 0.12);
+      const low = min - padding;
+      const high = max + padding;
+      const range = Math.max(0.01, high - low);
+      const leftPad = 12;
+      const rightPad = 12;
+      const topPad = 10;
+      const bottomPad = 18;
+      const innerWidth = Math.max(1, width - leftPad - rightPad);
+      const innerHeight = Math.max(1, height - topPad - bottomPad);
+
+      const toX = (index) => leftPad + (trail.length === 1 ? innerWidth / 2 : (index / (trail.length - 1)) * innerWidth);
+      const toY = (value) => topPad + (1 - ((value - low) / range)) * innerHeight;
+
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = 'rgba(168, 170, 162, 0.18)';
+      ctx.setLineDash([4, 4]);
+      [currentSeed, currentTarget].forEach((lineValue) => {
+        const y = toY(lineValue);
+        ctx.beginPath();
+        ctx.moveTo(leftPad, y);
+        ctx.lineTo(width - rightPad, y);
+        ctx.stroke();
+      });
+      ctx.setLineDash([]);
+
+      const lineIsUp = trail[trail.length - 1] >= trail[0];
+      const lineColor = lineIsUp ? '#48c774' : '#ff5f57';
+      const gradient = ctx.createLinearGradient(0, 0, width, 0);
+      gradient.addColorStop(0, lineIsUp ? 'rgba(72, 199, 116, 0.18)' : 'rgba(255, 95, 87, 0.18)');
+      gradient.addColorStop(1, 'rgba(73, 182, 214, 0.20)');
+
+      if (trail.length > 1) {
+        ctx.beginPath();
+        trail.forEach((value, index) => {
+          const x = toX(index);
+          const y = toY(value);
+          if (index === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.strokeStyle = lineColor;
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+
+        ctx.lineTo(toX(trail.length - 1), height - bottomPad);
+        ctx.lineTo(toX(0), height - bottomPad);
+        ctx.closePath();
+        ctx.fillStyle = gradient;
+        ctx.fill();
+      }
+
+      const currentX = toX(trail.length - 1);
+      const currentY = toY(trail[trail.length - 1]);
+      ctx.beginPath();
+      ctx.arc(currentX, currentY, 4.5, 0, Math.PI * 2);
+      ctx.fillStyle = lineColor;
+      ctx.fill();
+
+      ctx.font = '11px Arial, Helvetica, sans-serif';
+      ctx.fillStyle = 'rgba(243, 240, 232, 0.8)';
+      ctx.fillText(money(currentSeed), 14, toY(currentSeed) - 6);
+      ctx.fillText(money(currentTarget), 14, toY(currentTarget) - 6);
+    }
+
+    function appendEquity(balance, tradeDelta) {
+      const next = Number(balance);
+      if (!Number.isFinite(next)) return;
+      if (lastSeriesBalance === null || Math.abs(next - lastSeriesBalance) > 0.0001) {
+        equityHistory.push(next);
+        if (equityHistory.length > 120) equityHistory.shift();
+        lastSeriesBalance = next;
+        drawEquityChart();
+      }
+
+      const delta = Number.isFinite(tradeDelta)
+        ? Number(tradeDelta)
+        : (Number.isFinite(lastRenderedBalance) ? next - lastRenderedBalance : 0);
+      const span = Math.max(0.01, currentTarget - currentSeed);
+      const pct = Math.max(0, Math.min(100, ((next - currentSeed) / span) * 100));
+
+      el.equityValue.textContent = money(next);
+      el.equityDelta.textContent = signedMoney(delta);
+      el.equityDelta.classList.remove('win', 'loss', 'pulse');
+      el.equityDelta.classList.add(delta >= 0 ? 'win' : 'loss', 'pulse');
+      window.setTimeout(() => {
+        el.equityDelta.classList.remove('pulse');
+      }, 420);
+
+      el.progressBar.style.width = `${pct}%`;
+      el.progressMarker.style.left = `${pct}%`;
+      el.progressMarker.classList.remove('win', 'loss');
+      el.progressMarker.classList.add(delta >= 0 ? 'win' : 'loss');
+      el.progressBar.style.background = delta >= 0
+        ? 'linear-gradient(90deg, rgba(72, 199, 116, 0.92), rgba(73, 182, 214, 0.92))'
+        : 'linear-gradient(90deg, rgba(255, 95, 87, 0.92), rgba(244, 197, 66, 0.88))';
+      el.progressText.textContent = `${pct.toFixed(1)}%`;
+      el.progressStart.textContent = money(currentSeed);
+      el.progressTarget.textContent = money(currentTarget);
+      el.progressMarker.title = `Current balance ${money(next)}`;
+    }
+
+    function updateStats(event, tradeDelta, source) {
+      const balance = Number(event.balance || 0);
+      const seed = Number(event.seed || currentSeed);
+      const target = Number(event.target || currentTarget);
+      currentSeed = seed;
+      currentTarget = target;
+
+      const profitLoss = balance - seed;
+      const delta = Number.isFinite(tradeDelta)
+        ? Number(tradeDelta)
+        : (Number.isFinite(lastRenderedBalance) ? balance - lastRenderedBalance : 0);
+      const shouldAnimate = source === 'trade' || Math.abs(balance - lastRenderedBalance) > 0.0001;
+
+      el.balance.textContent = money(balance);
+      el.phase.textContent = phaseName(event.phase);
+      el.trades.textContent = event.totalTrades || 0;
+      el.winRate.textContent = `${Number(event.winRate || 0).toFixed(1)}%`;
+      el.profitLoss.textContent = signedMoney(profitLoss);
+      el.profitLoss.style.color = profitLoss >= 0 ? 'var(--green)' : 'var(--red)';
+      if (shouldAnimate) {
+        flashNode(el.profitLoss, profitLoss >= 0 ? 'win' : 'loss');
+        appendEquity(balance, delta);
+      } else {
+        el.progressStart.textContent = money(currentSeed);
+        el.progressTarget.textContent = money(currentTarget);
+        el.progressText.textContent = `${Math.max(0, Math.min(100, ((balance - currentSeed) / Math.max(0.01, currentTarget - currentSeed)) * 100)).toFixed(1)}%`;
+        el.progressMarker.title = `Current balance ${money(balance)}`;
+      }
+
+      if (source === 'trade') {
+        el.lastTradeText.textContent = `${event.result} on ${event.condition} ${signedMoney(event.profit)}`;
+        el.lastTradeText.style.color = event.profit >= 0 ? 'var(--green)' : 'var(--red)';
+      }
+
+      lastRenderedBalance = balance;
+      lastRenderedTrades = Number(event.totalTrades || lastRenderedTrades);
+    }
+
+    function addRow(cells, className) {
+      ensureLogStarted();
+      const row = document.createElement('tr');
+      row.className = className || '';
+      row.innerHTML = cells.map((cell) => `<td>${cell}</td>`).join('');
+      el.logBody.appendChild(row);
+      el.tableWrap.scrollTop = el.tableWrap.scrollHeight;
+    }
+
+    function updateProgress(balance, seed, target) {
+      currentSeed = Number(seed || currentSeed);
+      currentTarget = Number(target || currentTarget);
+      const span = Math.max(0.01, currentTarget - currentSeed);
+      const pct = Math.max(0, Math.min(100, ((balance - currentSeed) / span) * 100));
+      el.progressStart.textContent = money(currentSeed);
+      el.progressTarget.textContent = money(currentTarget);
+      el.progressText.textContent = `${pct.toFixed(1)}%`;
+      el.progressBar.style.width = `${pct}%`;
+      el.progressBar.style.background = balance >= currentSeed ? 'var(--cyan)' : 'var(--red)';
+    }
+
+    el.startBtn.addEventListener('click', () => {
+      clearBanner();
+      resetLog();
+      currentSeed = Number(el.seed.value);
+      currentTarget = Number(el.target.value);
+      resetEquityTrail();
+      updateStats({
+        balance: currentSeed,
+        seed: currentSeed,
+        target: currentTarget,
+        phase: 'growth',
+        totalTrades: 0,
+        winRate: 0
+      }, 0, 'balance');
+
+      socket.emit('start_bot', {
+        token: el.token.value,
+        seed: currentSeed,
+        target: currentTarget,
+        mode: el.mode.value,
+        guideFilters: el.guideFilters.checked,
+        strictBarFilters: el.strictBars.checked
+      }, (response) => {
+        if (!response || !response.ok) {
+          showBanner('danger', response && response.error ? response.error : 'Start failed');
+          setRunning(false);
+        } else {
+          setRunning(true);
+        }
+      });
+    });
+
+    el.stopBtn.addEventListener('click', () => {
+      socket.emit('stop_bot', {}, (response) => {
+        if (!response || !response.ok) {
+          showBanner('danger', response && response.error ? response.error : 'Stop failed');
+        }
+      });
+    });
+
+    socket.on('config', (config) => {
+      if (config.defaultMode) el.mode.value = config.defaultMode;
+      el.guideFilters.checked = Boolean(config.guideFilters);
+      el.strictBars.checked = Boolean(config.strictBarFilters);
+      if (config.hasEnvToken || config.hasDemoEnvToken || config.hasRealEnvToken) {
+        const envModes = [];
+        if (config.hasEnvToken) envModes.push('fallback');
+        if (config.hasDemoEnvToken) envModes.push('demo');
+        if (config.hasRealEnvToken) envModes.push('real');
+        el.tokenHelp.innerHTML = `Loaded from <code>.env</code>: ${envModes.join(' and ')} token${envModes.length > 1 ? 's' : ''}. Paste a token only if you want a one-off override.`;
+      } else {
+        el.tokenHelp.innerHTML = 'Store demo and real tokens in <code>.env</code> or paste one here for a single run.';
+      }
+    });
+
+    socket.on('status', (event) => {
+      el.statusPill.textContent = event.status || 'Running';
+      if (event.status === 'running') setRunning(true);
+    });
+
+    socket.on('balance_update', (event) => {
+      updateStats(event, null, 'balance');
+    });
+
+    socket.on('trade', (event) => {
+      const time = new Date(event.time).toLocaleTimeString();
+      addRow([
+        time,
+        event.digit,
+        event.condition,
+        money(event.stake),
+        signedMoney(event.profit),
+        event.result,
+        money(event.balance),
+        phaseName(event.phase)
+      ], event.result === 'Win' ? 'win' : 'loss');
+      updateStats({
+        balance: event.balance,
+        seed: currentSeed,
+        target: currentTarget,
+        phase: event.phase,
+        totalTrades: (lastRenderedTrades || 0) + 1,
+        winRate: event.winRate,
+        result: event.result,
+        condition: event.condition,
+        digit: event.digit,
+        profit: event.profit
+      }, Number(event.profit || 0), 'trade');
+    });
+
+    socket.on('phase_change', (event) => {
+      const time = new Date(event.time).toLocaleTimeString();
+      addRow([
+        time,
+        '-',
+        'Phase',
+        '-',
+        '-',
+        event.reason || '-',
+        money(event.balance),
+        `${phaseName(event.from)} -> ${phaseName(event.to)}`
+      ], 'phase');
+    });
+
+    socket.on('bot_error', (event) => {
+      showBanner('danger', event.message || 'Bot error');
+      setRunning(false);
+    });
+
+    socket.on('bot_stopped', (summary) => {
+      setRunning(false);
+      const text = `Stopped: ${summary.reason}. Trades ${summary.totalTrades}, win rate ${summary.winRate}%, net ${money(summary.netProfit)}.`;
+      if (summary.reason === 'take_profit') showBanner('success', text);
+      else if (summary.reason === 'stop_loss') showBanner('danger', text);
+      else showBanner('warn', text);
+    });
+
+    socket.on('connect_error', (error) => {
+      showBanner('danger', error.message || 'Socket connection failed');
+      setRunning(false);
+    });
+
+    resetEquityTrail();
+  </script>
+</body>
+</html>

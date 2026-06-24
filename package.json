@@ -1,0 +1,19 @@
+{
+  "name": "deriv-digit-bot",
+  "version": "0.1.0",
+  "description": "Plain JavaScript Deriv Digit Over/Under bot with a realtime dashboard.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js && node --check bot.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5",
+    "ws": "^8.17.1"
+  }
+}
