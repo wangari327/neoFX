@@ -11,6 +11,7 @@ The bot has no paper-trading simulator. It connects to Deriv and can run against
 - Demo/real mode selects which account type the bot requests from Deriv. If you pin an account ID, it must match the selected mode.
 - The dashboard shows both the live Deriv account balance and the bot's session equity, so you can tell real funds from the seed-based strategy ledger.
 - Session balance starts at the seed you enter. The bot uses contract profit/loss to update that session balance.
+- The bot preloads recent tick history on start so it can evaluate the 20-digit window immediately instead of waiting for a fresh warmup.
 - Volatility 100 Index symbol: `R_100`.
 - Contracts: `DIGITOVER` barrier `1`, and `DIGITUNDER` barrier `8`.
 - Last 20 digits are tracked. The bot chooses whichever condition has hit less often recently.
@@ -19,6 +20,7 @@ The bot has no paper-trading simulator. It connects to Deriv and can run against
   - Under 8 mirrors that logic by waiting for current digit `8`, with digits `8` and `9` below 10 percent.
   - Stability is checked against the previous 20-digit window when enough data exists.
   - Strict bar filters are available but disabled by default because they can block too many entries.
+  - Guide filters are also disabled by default so the core growth/risky/martingale loop can trade without getting stuck in setup mode.
 
 ## Phase Logic
 
@@ -85,7 +87,7 @@ BASE_STAKE_PERCENT=0.02
 RISKY_STAKE_PERCENT=0.35
 MARTINGALE_CAP_PERCENT=0.40
 WINDOW_SIZE=20
-GUIDE_FILTERS=true
+GUIDE_FILTERS=false
 STRICT_BAR_FILTERS=false
 ```
 

@@ -87,7 +87,7 @@
     },
     "GUIDE_FILTERS": {
       "description": "Enable the extra entry filters from the strategy notes.",
-      "value": "true",
+      "value": "false",
       "required": false
     },
     "STRICT_BAR_FILTERS": {

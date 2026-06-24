@@ -539,8 +539,8 @@
         </div>
 
         <div class="switch-row">
-          <label for="guideFilters" title="Extra entry checks from the strategy notes. They reduce trade count by waiting for the digit window to look favorable.">Guide filters</label>
-          <input id="guideFilters" type="checkbox" checked>
+          <label for="guideFilters" title="Optional extra checks from the strategy notes. Leave this off if you want the core loop to trade continuously.">Guide filters</label>
+          <input id="guideFilters" type="checkbox">
         </div>
 
         <div class="switch-row">
@@ -586,7 +586,7 @@
           <div class="sparkline-wrap">
             <div class="sparkline-head">
               <span>Balance Trail</span>
-              <span id="lastTradeText">Waiting for first trade</span>
+              <span id="lastTradeText">Warming up...</span>
             </div>
             <canvas id="equityChart" class="sparkline" width="100" height="120"></canvas>
           </div>
@@ -725,7 +725,7 @@
       el.progressTarget.textContent = money(currentTarget);
       el.progressText.textContent = '0.0%';
       el.progressMarker.title = `Session equity ${money(currentSeed)}`;
-      el.lastTradeText.textContent = 'Waiting for first trade';
+      el.lastTradeText.textContent = 'Warming up...';
       el.lastTradeText.style.color = 'var(--muted)';
       drawEquityChart();
     }

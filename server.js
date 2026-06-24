@@ -53,7 +53,7 @@ function publicConfig() {
   return {
     defaultMode: process.env.DEFAULT_MODE || 'demo',
     defaultSymbol: process.env.SYMBOL || 'R_100',
-    guideFilters: boolFrom(process.env.GUIDE_FILTERS, true),
+    guideFilters: boolFrom(process.env.GUIDE_FILTERS, false),
     strictBarFilters: boolFrom(process.env.STRICT_BAR_FILTERS, false),
     hasEnvToken: Boolean(
       process.env.DERIV_API_TOKEN ||
@@ -107,7 +107,7 @@ function sanitizeStartPayload(payload = {}) {
     riskyStakePercent: numberFrom(process.env.RISKY_STAKE_PERCENT, 0.35),
     martingaleCapPercent: numberFrom(process.env.MARTINGALE_CAP_PERCENT, 0.4),
     windowSize: numberFrom(process.env.WINDOW_SIZE, 20),
-    guideFilters: boolFrom(payload.guideFilters, boolFrom(process.env.GUIDE_FILTERS, true)),
+    guideFilters: boolFrom(payload.guideFilters, boolFrom(process.env.GUIDE_FILTERS, false)),
     strictBarFilters: boolFrom(payload.strictBarFilters, boolFrom(process.env.STRICT_BAR_FILTERS, false))
   };
 }

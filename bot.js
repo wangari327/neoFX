@@ -137,7 +137,7 @@ class DerivDigitBot extends EventEmitter {
       riskyStakePercent: toNumber(options.riskyStakePercent, 0.35),
       martingaleCapPercent: toNumber(options.martingaleCapPercent, 0.4),
       windowSize: Math.max(10, Math.floor(toNumber(options.windowSize, 20))),
-      guideFilters: options.guideFilters !== false,
+      guideFilters: options.guideFilters === true,
       strictBarFilters: options.strictBarFilters === true,
       duration: Math.max(1, Math.floor(toNumber(options.duration, 1))),
       durationUnit: options.durationUnit || 't'
@@ -220,7 +220,6 @@ class DerivDigitBot extends EventEmitter {
 
     this.accountKind = accountTypeFromAccount(account);
     this.accountBalance = roundMoney(toNumber(account.balance, this.accountBalance ?? this.balance));
-    this.balance = roundMoney(toNumber(account.balance, this.balance));
     this.emit('account', {
       accountId: account.account_id,
       loginid: account.loginid || account.account_id,
@@ -228,6 +227,7 @@ class DerivDigitBot extends EventEmitter {
       balance: this.accountBalance,
       accountKind: this.accountKind
     });
+    this.emitBalance();
 
     await new Promise((resolve, reject) => {
       this.ws = new WebSocket(wsUrl);
@@ -254,6 +254,7 @@ class DerivDigitBot extends EventEmitter {
 
     await this.send({ balance: 1, subscribe: 1 });
     await this.send({ ticks: this.options.symbol, subscribe: 1 });
+    void this.seedHistoricalDigits();
 
     this.pingTimer = setInterval(() => {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -337,6 +338,37 @@ class DerivDigitBot extends EventEmitter {
     return this.apiRequest(`/trading/v1/options/accounts/${encodeURIComponent(accountId)}/otp`, {
       method: 'POST'
     });
+  }
+
+  async seedHistoricalDigits() {
+    const count = Math.max(this.options.windowSize * 2, this.options.windowSize);
+
+    try {
+      const response = await this.send({
+        ticks_history: this.options.symbol,
+        count,
+        end: 'latest',
+        style: 'ticks'
+      });
+
+      const history = response.history || {};
+      const prices = Array.isArray(history.prices) ? history.prices : [];
+      if (!prices.length) return;
+
+      const pipSizeValue = Number(response.pip_size);
+      const pipSize = Number.isFinite(pipSizeValue) ? pipSizeValue : this.lastPipSize;
+      const digits = prices
+        .map((price) => quoteToDigit(price, pipSize))
+        .filter((digit) => Number.isInteger(digit) && digit >= 0 && digit <= 9);
+
+      if (!digits.length) return;
+
+      this.lastPipSize = Number.isFinite(pipSize) ? pipSize : this.lastPipSize;
+      const mergedDigits = [...digits, ...this.digits];
+      this.digits = mergedDigits.slice(-this.options.windowSize * 3);
+    } catch (error) {
+      this.emit('error_event', { message: `Unable to preload recent ticks: ${error.message}` });
+    }
   }
 
   send(payload, timeoutMs = 15000) {
