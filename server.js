@@ -27,6 +27,20 @@ let activeRun = null;
 let recentRunsCache = [];
 let bootError = null;
 
+function persistenceHint(error) {
+  const message = String(error && error.message ? error.message : error || '');
+  if (/SSL routines:.*alert internal error|SSL alert number 80|tlsv1 alert internal error/i.test(message)) {
+    return 'MongoDB TLS handshake failed. If this is Atlas, check the IP access list and make sure Heroku is allowed to reach the cluster. Heroku dyno IPs are dynamic, so Atlas often needs a broad allowlist during testing.';
+  }
+  if (/authentication failed|bad auth|not authorized/i.test(message)) {
+    return 'MongoDB authentication failed. Double-check the database username, password, and that the password is URL-encoded in the connection string.';
+  }
+  if (/server selection timed out|getaddrinfo ENOTFOUND|ENOTFOUND/i.test(message)) {
+    return 'MongoDB could not be reached. Check the hostname, DNS, and whether the database host is publicly reachable from Heroku.';
+  }
+  return message;
+}
+
 function boolFrom(value, fallback = false) {
   if (value === undefined || value === null || value === '') return fallback;
   if (typeof value === 'boolean') return value;
@@ -474,8 +488,9 @@ async function initializePersistence() {
     await runStore.connect();
     persistenceBackend = process.env.MONGODB_URL || process.env.MONGO_URL ? 'mongo' : 'memory';
   } catch (error) {
-    console.warn(`Persistence store unavailable (${error.message}). Falling back to in-memory history.`);
-    bootError = error.message;
+    const hint = persistenceHint(error);
+    console.warn(`Persistence store unavailable (${hint}). Falling back to in-memory history.`);
+    bootError = hint;
     runStore = createRunStore({});
     await runStore.connect();
     persistenceBackend = 'memory';
