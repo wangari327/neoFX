@@ -602,6 +602,8 @@
             <span id="gateFloorText">Protected floor $0.00</span>
             <span id="recoveryDebtText">Recovery debt $0.00</span>
             <span id="gateStepText">Gate step $0.00</span>
+            <span id="growthTierText">Growth tier 0</span>
+            <span id="growthFloorText">Growth floor $0.00</span>
           </div>
 
           <div class="sparkline-wrap">
@@ -671,6 +673,8 @@
       gateFloorText: document.getElementById('gateFloorText'),
       recoveryDebtText: document.getElementById('recoveryDebtText'),
       gateStepText: document.getElementById('gateStepText'),
+      growthTierText: document.getElementById('growthTierText'),
+      growthFloorText: document.getElementById('growthFloorText'),
       progressBar: document.getElementById('progressBar'),
       progressMarker: document.getElementById('progressMarker'),
       equityValue: document.getElementById('equityValue'),
@@ -800,6 +804,8 @@
       el.gateFloorText.textContent = `Protected floor ${money(currentSeed)}`;
       el.recoveryDebtText.textContent = 'Recovery debt $0.00';
       el.gateStepText.textContent = `Gate step ${money(Math.max(currentMinStake * 2, currentSeed * currentProfitGatePercent))}`;
+      el.growthTierText.textContent = 'Growth tier 0';
+      el.growthFloorText.textContent = `Growth floor ${money(currentMinStake)}`;
       el.progressMarker.title = `Session equity ${money(currentSeed)}`;
       el.lastTradeText.textContent = 'Warming up...';
       el.lastTradeText.style.color = 'var(--muted)';
@@ -950,6 +956,8 @@
       const gateFloor = Number(event.riskFloor || seed);
       const recoveryDebt = Number(event.recoveryDebt || 0);
       const gateStep = Number(event.gateStep || 0);
+      const growthTier = Number(event.growthTier || 0);
+      const growthFloor = Number(event.growthFloor || currentMinStake);
 
       const profitLoss = balance - seed;
       const delta = Number.isFinite(tradeDelta)
@@ -977,6 +985,8 @@
         el.gateFloorText.textContent = `Protected floor ${money(gateFloor)}`;
         el.recoveryDebtText.textContent = `Recovery debt ${money(recoveryDebt)}`;
         el.gateStepText.textContent = `Gate step ${money(gateStep)}`;
+        el.growthTierText.textContent = `Growth tier ${growthTier}`;
+        el.growthFloorText.textContent = `Growth floor ${money(growthFloor)}`;
       }
 
       if (source === 'trade') {
@@ -1067,6 +1077,7 @@
       el.guideFilters.checked = Boolean(config.guideFilters);
       el.strictBars.checked = Boolean(config.strictBarFilters);
       el.gateStepText.textContent = `Gate step ${money(Math.max(currentMinStake * 2, currentSeed * currentProfitGatePercent))}`;
+      el.growthFloorText.textContent = `Growth floor ${money(currentMinStake)}`;
       if (config.hasEnvToken) {
         el.tokenHelp.innerHTML = 'A Deriv authorization token is loaded from <code>.env</code>. Use the mode switch to choose the account type, and fill <em>Account ID</em> only if you want to pin a specific account.';
       } else {

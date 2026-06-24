@@ -80,6 +80,21 @@
       "value": "0.40",
       "required": false
     },
+    "GROWTH_MILESTONE_PERCENT": {
+      "description": "Profit progress needed before the growth stake floor steps up again.",
+      "value": "0.025",
+      "required": false
+    },
+    "GROWTH_STAKE_BUMP_PERCENT": {
+      "description": "How much the growth stake floor rises at each mini milestone.",
+      "value": "0.15",
+      "required": false
+    },
+    "GROWTH_STAKE_CAP_PERCENT": {
+      "description": "Maximum growth-mode stake as a fraction of session balance.",
+      "value": "0.12",
+      "required": false
+    },
     "PROFIT_GATE_PERCENT": {
       "description": "Profit increment needed before the bot attempts a higher-risk cycle.",
       "value": "0.08",

@@ -14,6 +14,7 @@ The bot has no paper-trading simulator. It connects to Deriv and can run against
 - Session balance starts at the seed you enter. The bot uses contract profit/loss to update that session balance.
 - The bot preloads recent tick history on start so it can evaluate the 20-digit window immediately instead of waiting for a fresh warmup.
 - If a trade attempt fails, the bot now pauses briefly and keeps analyzing instead of stopping outright on the first error.
+- Growth mode now uses a small stake staircase: each mini profit milestone nudges the growth stake floor upward, so long win streaks stop feeling flat.
 - Volatility 100 Index symbol: `R_100`.
 - Contracts: `DIGITOVER` barrier `1`, and `DIGITUNDER` barrier `8`.
 - Last 20 digits are tracked. The bot chooses whichever condition has hit less often recently.
@@ -31,6 +32,8 @@ Growth mode:
 - Base stake is 2 percent of session balance.
 - Minimum stake is `$0.35`.
 - The bot tracks a protected realized-profit floor.
+- The growth stake floor rises in small steps as the session gains profit.
+- Each mini milestone is based on a small profit chunk above the seed, and each step bumps the growth floor by a fixed percentage of the minimum stake.
 - When session balance reaches the protected floor plus the profit gate step, the bot enters Risky Jump.
 - The gate step defaults to 8 percent of the seed, or at least two minimum stakes, whichever is higher.
 - Every winning trade can push the protected floor higher.
@@ -59,6 +62,12 @@ Exit:
 - Take profit: session balance is greater than or equal to target.
 - Stop loss: session balance drops below seed x 0.5 while in Rebuild mode.
 - Manual stop from the dashboard.
+
+Growth staircase defaults:
+
+- `GROWTH_MILESTONE_PERCENT=0.025`
+- `GROWTH_STAKE_BUMP_PERCENT=0.15`
+- `GROWTH_STAKE_CAP_PERCENT=0.12`
 
 ## Local Setup
 
@@ -91,6 +100,9 @@ MIN_STAKE=0.35
 BASE_STAKE_PERCENT=0.02
 RISKY_STAKE_PERCENT=0.35
 MARTINGALE_CAP_PERCENT=0.40
+GROWTH_MILESTONE_PERCENT=0.025
+GROWTH_STAKE_BUMP_PERCENT=0.15
+GROWTH_STAKE_CAP_PERCENT=0.12
 PROFIT_GATE_PERCENT=0.08
 RECOVERY_BUFFER_PERCENT=0.05
 WINDOW_SIZE=20

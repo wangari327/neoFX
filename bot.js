@@ -136,6 +136,9 @@ class DerivDigitBot extends EventEmitter {
       baseStakePercent: toNumber(options.baseStakePercent, 0.02),
       riskyStakePercent: toNumber(options.riskyStakePercent, 0.35),
       martingaleCapPercent: toNumber(options.martingaleCapPercent, 0.4),
+      growthMilestonePercent: toNumber(options.growthMilestonePercent, 0.025),
+      growthStakeBumpPercent: toNumber(options.growthStakeBumpPercent, 0.15),
+      growthStakeCapPercent: toNumber(options.growthStakeCapPercent, 0.12),
       profitGatePercent: toNumber(options.profitGatePercent, 0.08),
       recoveryBufferPercent: toNumber(options.recoveryBufferPercent, 0.05),
       windowSize: Math.max(10, Math.floor(toNumber(options.windowSize, 20))),
@@ -427,6 +430,33 @@ class DerivDigitBot extends EventEmitter {
     });
   }
 
+  growthMilestoneStep() {
+    return roundMoney(Math.max(
+      this.options.minStake * 0.5,
+      this.options.seed * this.options.growthMilestonePercent
+    ));
+  }
+
+  growthTier() {
+    const step = this.growthMilestoneStep();
+    if (step <= 0) return 0;
+    const profitAboveSeed = Math.max(0, this.balance - this.options.seed);
+    return Math.floor(profitAboveSeed / step);
+  }
+
+  growthStakeFloor() {
+    const tier = this.growthTier();
+    return roundMoney(this.options.minStake * (1 + tier * this.options.growthStakeBumpPercent));
+  }
+
+  growthStake() {
+    const rawStake = Math.max(
+      this.balance * this.options.baseStakePercent,
+      this.growthStakeFloor()
+    );
+    return this.normalizeStake(rawStake, this.options.growthStakeCapPercent);
+  }
+
   profitGateStep() {
     return roundMoney(Math.max(this.options.minStake * 2, this.options.seed * this.options.profitGatePercent));
   }
@@ -671,14 +701,14 @@ class DerivDigitBot extends EventEmitter {
     if (this.phase === PHASES.GROWTH) {
       return {
         kind: PHASES.GROWTH,
-        stake: this.normalizeStake(this.balance * this.options.baseStakePercent)
+        stake: this.growthStake()
       };
     }
 
     if (this.phase === PHASES.RISKY) {
       return {
         kind: PHASES.RISKY,
-        stake: this.normalizeStake(this.balance * this.options.riskyStakePercent)
+        stake: this.normalizeStake(this.balance * this.options.riskyStakePercent, this.options.riskyStakePercent)
       };
     }
 
@@ -699,9 +729,9 @@ class DerivDigitBot extends EventEmitter {
     return null;
   }
 
-  normalizeStake(rawStake) {
+  normalizeStake(rawStake, capPercent = this.options.martingaleCapPercent) {
     const stake = roundMoney(Math.max(this.options.minStake, rawStake));
-    const maxStake = Math.max(this.options.minStake, this.balance * this.options.martingaleCapPercent);
+    const maxStake = Math.max(this.options.minStake, this.balance * capPercent);
     return roundMoney(clamp(stake, this.options.minStake, maxStake));
   }
 
@@ -801,6 +831,9 @@ class DerivDigitBot extends EventEmitter {
       phase: this.phase,
       plan: plan.kind,
       contractId: result.contractId,
+      growthTier: this.growthTier(),
+      growthStep: this.growthMilestoneStep(),
+      growthFloor: this.growthStakeFloor(),
       winRate: this.winRate(),
       riskFloor: this.riskFloor,
       recoveryDebt: this.recoveryDebt,
@@ -811,7 +844,8 @@ class DerivDigitBot extends EventEmitter {
       `${tradeEvent.time} digit=${tradeEvent.digit} condition="${tradeEvent.condition}" ` +
       `stake=${tradeEvent.stake.toFixed(2)} result=${tradeEvent.result} ` +
       `profit=${tradeEvent.profit.toFixed(2)} balance=${tradeEvent.balance.toFixed(2)} ` +
-      `phase=${tradeEvent.phase} floor=${this.riskFloor.toFixed(2)} debt=${this.recoveryDebt.toFixed(2)}`
+      `phase=${tradeEvent.phase} tier=${tradeEvent.growthTier} ` +
+      `growth_floor=${tradeEvent.growthFloor.toFixed(2)} floor=${this.riskFloor.toFixed(2)} debt=${this.recoveryDebt.toFixed(2)}`
     );
 
     this.emit('trade', tradeEvent);
@@ -866,7 +900,8 @@ class DerivDigitBot extends EventEmitter {
     const payload = this.phasePayload(previous, nextPhase, reason);
     console.log(
       `${new Date().toISOString()} phase_change ${previous} -> ${nextPhase} ` +
-      `reason=${reason} balance=${this.balance.toFixed(2)} floor=${this.riskFloor.toFixed(2)} debt=${this.recoveryDebt.toFixed(2)}`
+      `reason=${reason} balance=${this.balance.toFixed(2)} tier=${this.growthTier()} ` +
+      `floor=${this.riskFloor.toFixed(2)} debt=${this.recoveryDebt.toFixed(2)}`
     );
     this.emit('phase_change', payload);
     this.emitBalance();
@@ -881,6 +916,9 @@ class DerivDigitBot extends EventEmitter {
       balance: this.balance,
       riskFloor: this.riskFloor,
       recoveryDebt: this.recoveryDebt,
+      growthTier: this.growthTier(),
+      growthStep: this.growthMilestoneStep(),
+      growthFloor: this.growthStakeFloor(),
       gateStep: this.profitGateStep(),
       seed: this.options.seed,
       target: this.options.target
@@ -901,6 +939,9 @@ class DerivDigitBot extends EventEmitter {
       winRate: this.winRate(),
       riskFloor: this.riskFloor,
       recoveryDebt: this.recoveryDebt,
+      growthTier: this.growthTier(),
+      growthStep: this.growthMilestoneStep(),
+      growthFloor: this.growthStakeFloor(),
       gateStep: this.profitGateStep()
     });
   }
@@ -917,6 +958,9 @@ class DerivDigitBot extends EventEmitter {
       target: this.options.target,
       riskFloor: this.riskFloor,
       recoveryDebt: this.recoveryDebt,
+      growthTier: this.growthTier(),
+      growthStep: this.growthMilestoneStep(),
+      growthFloor: this.growthStakeFloor(),
       balance: this.balance
     });
   }
@@ -957,6 +1001,9 @@ class DerivDigitBot extends EventEmitter {
       symbol: this.options.symbol,
       riskFloor: this.riskFloor,
       recoveryDebt: this.recoveryDebt,
+      growthTier: this.growthTier(),
+      growthStep: this.growthMilestoneStep(),
+      growthFloor: this.growthStakeFloor(),
       gateStep: this.profitGateStep(),
       totalTrades: this.totalTrades,
       wins: this.wins,
@@ -976,7 +1023,8 @@ class DerivDigitBot extends EventEmitter {
     console.log(`trades=${summary.totalTrades} wins=${summary.wins} losses=${summary.losses} win_rate=${summary.winRate}%`);
     console.log(
       `start=${summary.startingBalance.toFixed(2)} final=${summary.finalBalance.toFixed(2)} ` +
-      `net=${summary.netProfit.toFixed(2)} floor=${summary.riskFloor.toFixed(2)} debt=${summary.recoveryDebt.toFixed(2)}`
+      `net=${summary.netProfit.toFixed(2)} floor=${summary.riskFloor.toFixed(2)} debt=${summary.recoveryDebt.toFixed(2)} ` +
+      `growth_tier=${summary.growthTier} growth_floor=${summary.growthFloor.toFixed(2)}`
     );
     console.log('=======================');
   }
