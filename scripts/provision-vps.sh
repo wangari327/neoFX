@@ -3,6 +3,7 @@ set -euo pipefail
 
 APP_DIR="${1:-/opt/deriv-digit-bot}"
 PORT="${PORT:-3000}"
+NODE_MAJOR="${NODE_MAJOR:-24}"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run this script as root on the VPS."
@@ -24,7 +25,7 @@ if command -v node >/dev/null 2>&1; then
 fi
 
 if [[ "${need_node_install}" -eq 1 ]]; then
-  curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+  curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash -
   apt-get install -y nodejs
 fi
 
