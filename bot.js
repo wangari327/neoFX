@@ -228,6 +228,7 @@ class DerivDigitBot extends EventEmitter {
       accountKind: this.accountKind
     });
     this.emitBalance();
+    this.emitAnalysis('connecting', 'Connected to the selected account. Waiting for recent digits and live ticks.');
 
     await new Promise((resolve, reject) => {
       this.ws = new WebSocket(wsUrl);
@@ -255,6 +256,7 @@ class DerivDigitBot extends EventEmitter {
     await this.send({ balance: 1, subscribe: 1 });
     await this.send({ ticks: this.options.symbol, subscribe: 1 });
     void this.seedHistoricalDigits();
+    this.emitAnalysis('listening', 'Live ticks are flowing. Building the digit window now.');
 
     this.pingTimer = setInterval(() => {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -366,9 +368,33 @@ class DerivDigitBot extends EventEmitter {
       this.lastPipSize = Number.isFinite(pipSize) ? pipSize : this.lastPipSize;
       const mergedDigits = [...digits, ...this.digits];
       this.digits = mergedDigits.slice(-this.options.windowSize * 3);
+      this.emitAnalysis(
+        this.digits.length >= this.options.windowSize ? 'ready' : 'warming_up',
+        this.digits.length >= this.options.windowSize
+          ? `History loaded. Window is ready with ${this.digits.length} digits tracked.`
+          : `History loaded. Warming up ${this.digits.length}/${this.options.windowSize}.`
+      );
     } catch (error) {
       this.emit('error_event', { message: `Unable to preload recent ticks: ${error.message}` });
     }
+  }
+
+  emitAnalysis(stage, detail, extras = {}) {
+    this.emit('analysis', {
+      time: new Date().toISOString(),
+      stage,
+      detail,
+      phase: this.phase,
+      tradeInFlight: this.tradeInFlight,
+      digitsSeen: this.digits.length,
+      windowSize: this.options.windowSize,
+      currentDigit: extras.currentDigit ?? null,
+      candidate: extras.condition ? extras.condition.label : null,
+      entryDigit: extras.condition ? extras.condition.entryDigit : null,
+      guideFilters: this.options.guideFilters,
+      strictBarFilters: this.options.strictBarFilters,
+      plan: extras.plan ? extras.plan.kind : null
+    });
   }
 
   send(payload, timeoutMs = 15000) {
@@ -485,15 +511,50 @@ class DerivDigitBot extends EventEmitter {
       stats: this.stats()
     });
 
-    if (this.tradeInFlight || this.digits.length < this.options.windowSize) return;
+    if (this.tradeInFlight) {
+      this.emitAnalysis('trade_in_flight', 'A trade has already been sent. Waiting for the contract result.', {
+        currentDigit: tick.digit
+      });
+      return;
+    }
+
+    if (this.digits.length < this.options.windowSize) {
+      this.emitAnalysis(
+        'warming_up',
+        `Warming up ${this.digits.length}/${this.options.windowSize}. The bot is still building the recent digit window.`,
+        { currentDigit: tick.digit }
+      );
+      return;
+    }
 
     const condition = this.selectCondition(tick.digit);
-    if (!condition) return;
+    if (!condition) {
+      this.emitAnalysis(
+        'waiting_condition',
+        this.options.guideFilters
+          ? `Window is ready, but the guide filters are not satisfied on digit ${tick.digit}.`
+          : `Window is ready, but no trade setup was selected on digit ${tick.digit}.`,
+        { currentDigit: tick.digit }
+      );
+      return;
+    }
 
     const plan = this.nextTradePlan();
-    if (!plan) return;
+    if (!plan) {
+      this.emitAnalysis(
+        'waiting_balance',
+        `Signal found for ${condition.label}, but the session balance is not high enough for the next stake.`,
+        { currentDigit: tick.digit, condition }
+      );
+      return;
+    }
 
     this.currentPlan = plan;
+    this.emitAnalysis(
+      'signal_ready',
+      `Signal ready: ${condition.label} on digit ${tick.digit}. Placing ${plan.kind} stake of ${plan.stake.toFixed(2)}.`,
+      { currentDigit: tick.digit, condition, plan }
+    );
     this.placeTrade(condition, plan).catch((error) => {
       this.tradeInFlight = false;
       this.emit('error_event', { message: error.message });
@@ -594,6 +655,11 @@ class DerivDigitBot extends EventEmitter {
 
   async placeTrade(condition, plan) {
     this.tradeInFlight = true;
+    this.emitAnalysis(
+      'placing_trade',
+      `Submitting ${condition.label} with a ${plan.kind} stake of ${plan.stake.toFixed(2)}.`,
+      { condition, plan }
+    );
     const stake = plan.stake;
 
     const proposal = await this.send({

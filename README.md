@@ -10,6 +10,7 @@ The bot has no paper-trading simulator. It connects to Deriv and can run against
 - Dashboard inputs for a single Deriv authorization token, optional account ID, seed, target, demo/real mode, guide filters, and strict bar filters.
 - Demo/real mode selects which account type the bot requests from Deriv. If you pin an account ID, it must match the selected mode.
 - The dashboard shows both the live Deriv account balance and the bot's session equity, so you can tell real funds from the seed-based strategy ledger.
+- The dashboard also shows live analysis status, so you can see whether the bot is warming up, waiting for a setup, or already in a trade.
 - Session balance starts at the seed you enter. The bot uses contract profit/loss to update that session balance.
 - The bot preloads recent tick history on start so it can evaluate the 20-digit window immediately instead of waiting for a fresh warmup.
 - Volatility 100 Index symbol: `R_100`.

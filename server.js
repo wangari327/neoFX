@@ -53,6 +53,7 @@ function publicConfig() {
   return {
     defaultMode: process.env.DEFAULT_MODE || 'demo',
     defaultSymbol: process.env.SYMBOL || 'R_100',
+    windowSize: numberFrom(process.env.WINDOW_SIZE, 20),
     guideFilters: boolFrom(process.env.GUIDE_FILTERS, false),
     strictBarFilters: boolFrom(process.env.STRICT_BAR_FILTERS, false),
     hasEnvToken: Boolean(
@@ -116,6 +117,7 @@ function bindBot(bot) {
   bot.on('status', (event) => io.emit('status', event));
   bot.on('account', (event) => io.emit('account', event));
   bot.on('digit', (event) => io.emit('digit', event));
+  bot.on('analysis', (event) => io.emit('analysis', event));
   bot.on('trade', (event) => io.emit('trade', event));
   bot.on('phase_change', (event) => io.emit('phase_change', event));
   bot.on('balance_update', (event) => {

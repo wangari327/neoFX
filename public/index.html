@@ -653,6 +653,7 @@
     let logStarted = false;
     let currentSeed = Number(el.seed.value);
     let currentTarget = Number(el.target.value);
+    let currentWindowSize = 20;
     let lastKnownAccountBalance = null;
     let equityHistory = [currentSeed];
     let lastSeriesBalance = currentSeed;
@@ -692,6 +693,39 @@
       el.startBtn.disabled = running;
       el.stopBtn.disabled = !running;
       el.statusPill.textContent = running ? 'Running' : 'Idle';
+    }
+
+    function updateAnalysis(event) {
+      const stage = String(event && event.stage ? event.stage : '').toLowerCase();
+      const digitsSeen = Number(event && event.digitsSeen ? event.digitsSeen : 0);
+      const windowSize = Number(event && event.windowSize ? event.windowSize : currentWindowSize);
+      if (Number.isFinite(windowSize) && windowSize > 0) {
+        currentWindowSize = windowSize;
+      }
+
+      let text = event && event.detail ? event.detail : 'Analyzing live ticks...';
+      let color = 'var(--muted)';
+
+      if (stage === 'connecting' || stage === 'listening') {
+        color = 'var(--cyan)';
+      } else if (stage === 'warming_up') {
+        text = `Warming up ${digitsSeen}/${currentWindowSize}.`;
+        color = 'var(--yellow)';
+      } else if (stage === 'ready') {
+        text = event.detail || `Window ready ${digitsSeen}/${currentWindowSize}.`;
+        color = 'var(--green)';
+      } else if (stage === 'waiting_condition') {
+        color = 'var(--yellow)';
+      } else if (stage === 'waiting_balance') {
+        color = 'var(--yellow)';
+      } else if (stage === 'signal_ready' || stage === 'placing_trade') {
+        color = 'var(--green)';
+      } else if (stage === 'trade_in_flight') {
+        color = 'var(--cyan)';
+      }
+
+      el.lastTradeText.textContent = text;
+      el.lastTradeText.style.color = color;
     }
 
     function resetLog() {
@@ -970,6 +1004,9 @@
 
     socket.on('config', (config) => {
       if (config.defaultMode) el.mode.value = config.defaultMode;
+      if (Number.isFinite(Number(config.windowSize))) {
+        currentWindowSize = Number(config.windowSize);
+      }
       el.guideFilters.checked = Boolean(config.guideFilters);
       el.strictBars.checked = Boolean(config.strictBarFilters);
       if (config.hasEnvToken) {
@@ -990,6 +1027,10 @@
     socket.on('status', (event) => {
       el.statusPill.textContent = event.status || 'Running';
       if (event.status === 'running') setRunning(true);
+    });
+
+    socket.on('analysis', (event) => {
+      updateAnalysis(event);
     });
 
     socket.on('balance_update', (event) => {
