@@ -623,6 +623,47 @@
       background: var(--yellow);
     }
 
+    .session-strip {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1px;
+      margin-bottom: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--line);
+    }
+
+    .session-card {
+      display: grid;
+      gap: 4px;
+      padding: 10px 12px;
+      min-width: 0;
+      background: rgba(12, 14, 14, 0.95);
+    }
+
+    .session-card > span:first-child {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.2;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .session-card strong {
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1.2;
+      font-weight: 800;
+    }
+
+    .session-meta {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+      min-width: 0;
+    }
+
     .table-wrap {
       max-height: 520px;
       overflow: auto;
@@ -746,6 +787,10 @@
         justify-content: space-between;
       }
 
+      .session-strip {
+        grid-template-columns: 1fr;
+      }
+
       .inline,
       .stats {
         grid-template-columns: 1fr;
@@ -806,6 +851,19 @@
     </div>
 
     <div id="banner" class="banner"></div>
+
+    <div class="session-strip" aria-label="Session status">
+      <div class="session-card">
+        <span>Session</span>
+        <strong id="sessionStateText">Idle</strong>
+        <span id="sessionStateMeta" class="session-meta">No live run. Start a session to begin.</span>
+      </div>
+      <div class="session-card">
+        <span>Last finish</span>
+        <strong id="sessionLastText">None yet</strong>
+        <span id="sessionLastMeta" class="session-meta">No completed run recorded yet.</span>
+      </div>
+    </div>
 
     <section class="layout">
       <aside class="panel controls">
@@ -1049,6 +1107,10 @@
       refreshRunsBtn: document.getElementById('refreshRunsBtn'),
       statusPill: document.getElementById('statusPill'),
       banner: document.getElementById('banner'),
+      sessionStateText: document.getElementById('sessionStateText'),
+      sessionStateMeta: document.getElementById('sessionStateMeta'),
+      sessionLastText: document.getElementById('sessionLastText'),
+      sessionLastMeta: document.getElementById('sessionLastMeta'),
       balance: document.getElementById('balance'),
       phase: document.getElementById('phase'),
       trades: document.getElementById('trades'),
@@ -1097,6 +1159,11 @@
     let currentRunStatus = 'idle';
     let currentActiveRunId = null;
     let currentResumeRunId = null;
+    let currentSessionState = {
+      activeRun: null,
+      resumeRun: null,
+      lastClosedRun: null
+    };
     let currentPersistenceBackend = 'memory';
     let currentFactoryDefaults = null;
     let currentSavedDefaults = null;
@@ -1320,6 +1387,70 @@
     function statusLabel(value) {
       const text = String(value || 'idle').replace(/_/g, ' ');
       return text.charAt(0).toUpperCase() + text.slice(1);
+    }
+
+    function sessionReasonLabel(value) {
+      const reason = String(value || '').toLowerCase();
+      switch (reason) {
+        case 'take_profit':
+          return 'Take profit';
+        case 'stop_loss':
+          return 'Stop loss';
+        case 'manual':
+          return 'Manual stop';
+        case 'server_restart':
+          return 'Server restart';
+        case 'interrupted':
+          return 'Interrupted';
+        case 'start_failed':
+          return 'Start failed';
+        case 'failed':
+          return 'Failed';
+        case 'ended':
+          return 'Ended';
+        case 'paused':
+          return 'Paused';
+        default:
+          return reason ? statusLabel(reason) : 'Unknown';
+      }
+    }
+
+    function renderSessionState(state = {}) {
+      const activeRun = normalizeSocketRun(state.activeRun);
+      const resumeRun = normalizeSocketRun(state.resumeRun);
+      const lastClosedRun = normalizeSocketRun(state.lastClosedRun);
+
+      if (activeRun) {
+        const activeStatus = String(activeRun.status || 'running').toLowerCase();
+        const startedAt = formatTime(activeRun.startedAt || activeRun.snapshot?.startedAt || activeRun.updatedAt);
+        const phase = phaseName(activeRun.phase || activeRun.snapshot?.phase || 'growth');
+        el.sessionStateText.textContent = activeStatus === 'paused' ? 'Paused session' : 'Live session';
+        el.sessionStateMeta.textContent = `Run ${shortId(activeRun.id)} · ${statusLabel(activeStatus)} · ${phase} · started ${startedAt}`;
+      } else if (resumeRun) {
+        const pausedAt = formatTime(resumeRun.pausedAt || resumeRun.updatedAt || resumeRun.startedAt);
+        el.sessionStateText.textContent = 'Paused session';
+        el.sessionStateMeta.textContent = `Run ${shortId(resumeRun.id)} · resume available · paused ${pausedAt}`;
+      } else {
+        el.sessionStateText.textContent = 'Idle';
+        el.sessionStateMeta.textContent = 'No live run. Start a session to begin.';
+      }
+
+      if (lastClosedRun) {
+        const summary = lastClosedRun.summary || {};
+        const reason = sessionReasonLabel(summary.reason || lastClosedRun.reason || lastClosedRun.status);
+        const endedAt = lastClosedRun.endedAt || lastClosedRun.pausedAt || summary.stoppedAt || lastClosedRun.updatedAt;
+        const netProfit = Number.isFinite(Number(summary.netProfit))
+          ? Number(summary.netProfit)
+          : Number.isFinite(Number(lastClosedRun.netProfit))
+            ? Number(lastClosedRun.netProfit)
+            : Number(lastClosedRun.balance ?? 0) - Number(lastClosedRun.seed ?? currentSeed);
+        const totalTrades = Number(summary.totalTrades ?? lastClosedRun.totalTrades ?? 0);
+        el.sessionLastText.textContent = reason;
+        el.sessionLastMeta.textContent = `${signedMoney(netProfit)} · ${totalTrades} trades · ${formatTime(endedAt)}`;
+      } else {
+        el.sessionLastText.textContent = 'None yet';
+        el.sessionLastMeta.textContent = 'No completed run recorded yet.';
+      }
     }
 
     function sniperStatusLabel(event) {
@@ -1761,6 +1892,12 @@
           currentPersistenceBackend = state.persistenceBackend || currentPersistenceBackend;
           el.persistenceText.textContent = currentPersistenceBackend === 'mongo' ? 'Mongo history' : 'Memory history';
           renderRecentRuns(state.recentRuns || []);
+          currentSessionState = {
+            activeRun: state.activeRun || null,
+            resumeRun: state.resumeRun || null,
+            lastClosedRun: state.lastClosedRun || null
+          };
+          renderSessionState(currentSessionState);
           if (state.activeRun) {
             refreshInputsFromRun(normalizeSocketRun(state.activeRun));
             syncControlsAndRun(normalizeSocketRun(state.activeRun));
@@ -2260,6 +2397,12 @@
       currentPersistenceBackend = state.persistenceBackend || currentPersistenceBackend;
       el.persistenceText.textContent = currentPersistenceBackend === 'mongo' ? 'Mongo history' : 'Memory history';
       renderRecentRuns(state.recentRuns || []);
+      currentSessionState = {
+        activeRun: state.activeRun || null,
+        resumeRun: state.resumeRun || null,
+        lastClosedRun: state.lastClosedRun || null
+      };
+      renderSessionState(currentSessionState);
       if (state.activeRun) {
         refreshInputsFromRun(normalizeSocketRun(state.activeRun));
         syncControlsAndRun(normalizeSocketRun(state.activeRun));
@@ -2289,6 +2432,25 @@
       appendAndUpdate(event, 'status');
       if (event.status) {
         setControlState(event.status);
+      }
+      if (currentSessionState.activeRun) {
+        currentSessionState.activeRun = {
+          ...currentSessionState.activeRun,
+          status: event.status || currentSessionState.activeRun.status,
+          pauseReason: event.pauseReason || currentSessionState.activeRun.pauseReason || null,
+          phase: event.phase || currentSessionState.activeRun.phase,
+          balance: Number.isFinite(Number(event.balance)) ? Number(event.balance) : currentSessionState.activeRun.balance,
+          updatedAt: new Date().toISOString()
+        };
+        renderSessionState(currentSessionState);
+      } else if (currentSessionState.resumeRun && event.status === 'paused') {
+        currentSessionState.resumeRun = {
+          ...currentSessionState.resumeRun,
+          status: 'paused',
+          pauseReason: event.pauseReason || currentSessionState.resumeRun.pauseReason || null,
+          updatedAt: new Date().toISOString()
+        };
+        renderSessionState(currentSessionState);
       }
       if (event.status === 'paused') {
         showBanner('warn', event.pauseReason ? `Run paused (${event.pauseReason}).` : 'Run paused.');
@@ -2348,6 +2510,16 @@
     socket.on('bot_stopped', (summary) => {
       appendAndUpdate(summary, 'bot_stopped');
       setControlState('idle');
+      currentSessionState = {
+        activeRun: null,
+        resumeRun: null,
+        lastClosedRun: {
+          ...summary,
+          status: summary.reason === 'take_profit' || summary.reason === 'stop_loss' ? 'ended' : 'ended',
+          summary
+        }
+      };
+      renderSessionState(currentSessionState);
       const text = `Stopped: ${summary.reason}. Trades ${summary.totalTrades}, win rate ${summary.winRate}%, net ${money(summary.netProfit)}.`;
       if (summary.reason === 'take_profit') showBanner('success', text);
       else if (summary.reason === 'stop_loss') showBanner('danger', text);

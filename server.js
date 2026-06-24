@@ -310,6 +310,10 @@ function latestPausedRun() {
   return recentRunsCache.find((run) => run.status === 'paused' && !(run.snapshot && run.snapshot.tradeInFlight)) || null;
 }
 
+function latestClosedRun() {
+  return recentRunsCache.find((run) => !['running', 'starting', 'paused'].includes(run.status)) || null;
+}
+
 function buildSessionState() {
   const resumeRun = activeRun && activeRun.status === 'paused'
     ? activeRun
@@ -318,6 +322,7 @@ function buildSessionState() {
   return {
     activeRun,
     resumeRun,
+    lastClosedRun: latestClosedRun(),
     recentRuns: recentRunsCache,
     persistenceBackend,
     bootError,

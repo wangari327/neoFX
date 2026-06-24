@@ -135,12 +135,21 @@ STRICT_BAR_FILTERS=false
 
 ## Persistence
 
-If `MONGODB_URL` is set, the app stores each run in MongoDB:
+If `MONGODB_URL` is set, the app stores each run in MongoDB. Put the connection string in your local `.env` file, or set it as a Heroku / DigitalOcean environment variable:
+
+```env
+MONGODB_URL=mongodb+srv://USER:PASSWORD@cluster.example.mongodb.net/?retryWrites=true&w=majority
+MONGODB_DB=deriv_digit_bot
+```
+
+With Mongo enabled:
 
 - run summaries stay available after restarts and redeploys
 - trade and phase events are saved for later review
 - paused runs can be resumed without losing the session state
 - interrupted runs are marked separately if the process died mid-trade
+- the dashboard can show whether the latest session is still live, paused, or already ended
+- the dashboard can show whether the last finished run stopped by take profit, stop loss, manual stop, or a server restart
 
 If MongoDB is not configured, the dashboard still works, but run history stays in memory only.
 
