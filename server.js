@@ -55,30 +55,32 @@ function publicConfig() {
     defaultSymbol: process.env.SYMBOL || 'R_100',
     guideFilters: boolFrom(process.env.GUIDE_FILTERS, true),
     strictBarFilters: boolFrom(process.env.STRICT_BAR_FILTERS, false),
-    hasEnvToken: Boolean(process.env.DERIV_API_TOKEN),
-    hasDemoEnvToken: Boolean(process.env.DERIV_DEMO_API_TOKEN),
-    hasRealEnvToken: Boolean(process.env.DERIV_REAL_API_TOKEN)
+    hasEnvToken: Boolean(
+      process.env.DERIV_API_TOKEN ||
+      process.env.DERIV_DEMO_API_TOKEN ||
+      process.env.DERIV_REAL_API_TOKEN
+    )
   };
 }
 
-function tokenForMode(mode, overrideToken) {
-  const token = String(overrideToken || '').trim();
-  if (token) return token;
-
-  if (mode === 'real') {
-    return String(process.env.DERIV_REAL_API_TOKEN || process.env.DERIV_API_TOKEN || '').trim();
-  }
-
-  return String(process.env.DERIV_DEMO_API_TOKEN || process.env.DERIV_API_TOKEN || '').trim();
+function resolveToken(overrideToken) {
+  return String(
+    overrideToken ||
+    process.env.DERIV_API_TOKEN ||
+    process.env.DERIV_DEMO_API_TOKEN ||
+    process.env.DERIV_REAL_API_TOKEN ||
+    ''
+  ).trim();
 }
 
 function sanitizeStartPayload(payload = {}) {
   const seed = roundMoney(numberFrom(payload.seed, 10));
   const target = roundMoney(numberFrom(payload.target, 50));
   const mode = payload.mode === 'real' ? 'real' : 'demo';
-  const token = tokenForMode(mode, payload.token);
+  const token = resolveToken(payload.token);
+  const accountId = String(payload.accountId || process.env.DERIV_ACCOUNT_ID || '').trim();
   const appId = String(process.env.DERIV_APP_ID || '1089').trim();
-  const endpoint = process.env.DERIV_WS_URL || `wss://ws.derivws.com/websockets/v3?app_id=${appId}`;
+  const apiBaseUrl = String(process.env.DERIV_API_BASE_URL || 'https://api.derivws.com').trim();
 
   if (seed < 1) throw new Error('Seed must be at least 1.00.');
   if (target <= seed) throw new Error('Target must be greater than seed.');
@@ -87,7 +89,9 @@ function sanitizeStartPayload(payload = {}) {
   return {
     mode,
     token,
-    endpoint,
+    accountId,
+    apiBaseUrl,
+    appId,
     seed,
     target,
     symbol: process.env.SYMBOL || 'R_100',

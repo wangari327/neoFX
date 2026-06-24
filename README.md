@@ -2,13 +2,13 @@
 
 Plain JavaScript bot for Deriv Digit Over 1 and Digit Under 8 with a realtime Socket.IO dashboard.
 
-The bot has no paper-trading simulator. It connects to Deriv and can run against either a demo account token or a real account token. Use demo mode first, then only consider real mode after the demo logs prove the rules behave exactly as expected.
+The bot has no paper-trading simulator. It connects to Deriv and can run against either a demo account or a real account. Use demo mode first, then only consider real mode after the demo logs prove the rules behave exactly as expected.
 
 ## What It Implements
 
 - Node.js, `ws`, `express`, `socket.io`, no frontend framework, no TypeScript.
-- Dashboard inputs for Deriv API token, seed, target, demo/real mode, guide filters, and strict bar filters.
-- Demo/real mode is validated after authorization. If you select demo but paste a real account token, or select real but paste a demo token, the bot stops before placing trades.
+- Dashboard inputs for a single Deriv authorization token, optional account ID, seed, target, demo/real mode, guide filters, and strict bar filters.
+- Demo/real mode selects which account type the bot requests from Deriv. If you pin an account ID, it must match the selected mode.
 - Session balance starts at the seed you enter. The bot uses contract profit/loss to update that session balance.
 - Volatility 100 Index symbol: `R_100`.
 - Contracts: `DIGITOVER` barrier `1`, and `DIGITUNDER` barrier `8`.
@@ -71,10 +71,9 @@ http://localhost:3000
 ```env
 PORT=3000
 DERIV_API_TOKEN=
-DERIV_DEMO_API_TOKEN=
-DERIV_REAL_API_TOKEN=
+DERIV_ACCOUNT_ID=
 DERIV_APP_ID=1089
-DERIV_WS_URL=
+DERIV_API_BASE_URL=https://api.derivws.com
 DEFAULT_MODE=demo
 SYMBOL=R_100
 CURRENCY=USD
@@ -89,7 +88,7 @@ GUIDE_FILTERS=true
 STRICT_BAR_FILTERS=false
 ```
 
-`DERIV_API_TOKEN` is an optional fallback. If you want zero copy-paste at startup, put `DERIV_DEMO_API_TOKEN` and/or `DERIV_REAL_API_TOKEN` in `.env`, then pick the matching mode in the dashboard. The dropdown is a safety check, not a magic account converter.
+`DERIV_API_TOKEN` is the main token the bot uses. `DERIV_ACCOUNT_ID` is optional and only needed if you want to pin a specific account instead of letting the bot pick the first active demo or real account that matches the selected mode.
 
 ## API Tokens
 
@@ -97,11 +96,11 @@ Create your token in the Deriv dashboard:
 
 1. Log in to the Deriv account you want to use.
 2. Open the API tokens area in your account settings/dashboard.
-3. Create a new token for the matching account type, demo for demo trading and real for live trading.
-4. Give it the scopes you need. For this bot, `trade` is required and `read` is useful for account info.
+3. Create a token with the `trade` scope.
+4. Add `account_manage` only if you plan to extend the app to create or reset accounts later.
 5. Copy the token once and store it in `.env` or paste it into the dashboard for a one-off run.
 
-The token is tied to the account type you created it for. If you pick `Deriv Demo` in the UI, use a demo token. If you pick `Deriv Real`, use a real token from the real account.
+The current API docs treat the token as general authorization, not as the demo/real switch. The bot uses the token to request your account list, then it selects a demo or real account by account type and requests an OTP for that account. If you know the exact account ID you want, put it in `DERIV_ACCOUNT_ID`.
 
 ## DigitalOcean Deployment
 
@@ -137,7 +136,7 @@ For a quicker path from this Windows workspace, use:
 powershell -File .\scripts\deploy-to-droplet.ps1 -DropletIp YOUR_DROPLET_IP
 ```
 
-That script uploads the project, runs the VPS bootstrap, installs Node.js 20, PM2, and the firewall rules, then starts the bot.
+That script uploads the project, runs the VPS bootstrap, installs Node.js 24 LTS, PM2, and the firewall rules, then starts the bot.
 
 By default, it uses your local SSH setup. If you want to point it at a specific private key file, pass `-IdentityFile`. Example:
 
@@ -194,13 +193,13 @@ nano .env
 sudo bash scripts/install-on-vps.sh
 ```
 
-That script installs Node.js 20, PM2, and UFW, opens port 3000, installs dependencies, and starts the app. The `pm2 startup` command prints one more command. Copy and run that printed command if your server asks for it.
+That script installs Node.js 24 LTS, PM2, and UFW, opens port 3000, installs dependencies, and starts the app. The `pm2 startup` command prints one more command. Copy and run that printed command if your server asks for it.
 
 Open the dashboard at `http://YOUR_DROPLET_IP:3000`.
 
 ## Safer Live Use
 
-- Use a demo token first.
+- Use a demo account first.
 - Keep `DASHBOARD_PASSWORD` set on any public server.
-- Do not paste a real token into a dashboard served over plain HTTP on an untrusted network.
+- Do not paste a live authorization token into a dashboard served over plain HTTP on an untrusted network.
 - A bot can execute faster than manual clicking, but it does not remove the house edge or streak risk.

@@ -30,6 +30,8 @@ const PHASES = {
   STOPPED: 'stopped'
 };
 
+const DEFAULT_API_BASE_URL = 'https://api.derivws.com';
+
 function toNumber(value, fallback) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
@@ -43,6 +45,12 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
+function joinUrl(base, path) {
+  const cleanBase = String(base || DEFAULT_API_BASE_URL).trim().replace(/\/+$/, '');
+  const cleanPath = String(path || '').trim().replace(/^\/+/, '');
+  return `${cleanBase}/${cleanPath}`;
+}
+
 function quoteToDigit(quote, pipSize = 2) {
   if (quote === null || quote === undefined || quote === '') return null;
   const numeric = Number(quote);
@@ -53,18 +61,56 @@ function quoteToDigit(quote, pipSize = 2) {
   return Number(digits[digits.length - 1]);
 }
 
-function accountKindFromAuthorize(authorize = {}) {
-  const loginid = String(authorize.loginid || '');
-  const accountList = Array.isArray(authorize.account_list) ? authorize.account_list : [];
-  const current = accountList.find((account) => account.loginid === loginid);
+function accountTypeFromAccount(account = {}) {
+  const accountType = String(account.account_type || account.accountType || '').toLowerCase();
+  if (accountType === 'demo' || accountType === 'real') return accountType;
 
-  if (authorize.is_virtual === 1 || authorize.is_virtual === true) return 'demo';
-  if (authorize.is_virtual === 0 || authorize.is_virtual === false) return 'real';
-  if (current && (current.is_virtual === 1 || current.is_virtual === true)) return 'demo';
-  if (current && (current.is_virtual === 0 || current.is_virtual === false)) return 'real';
+  if (account.is_virtual === 1 || account.is_virtual === true) return 'demo';
+  if (account.is_virtual === 0 || account.is_virtual === false) return 'real';
+
+  const loginid = String(account.loginid || account.account_id || '');
   if (/^VRTC/i.test(loginid) || /^VR/i.test(loginid)) return 'demo';
   if (loginid) return 'real';
   return 'unknown';
+}
+
+function normalizeAccountList(payload = {}) {
+  const candidate =
+    (Array.isArray(payload.data) && payload.data) ||
+    (Array.isArray(payload.accounts) && payload.accounts) ||
+    (Array.isArray(payload.result) && payload.result) ||
+    (Array.isArray(payload) && payload) ||
+    null;
+
+  if (candidate) return candidate;
+  if (payload.data && typeof payload.data === 'object') return [payload.data];
+  if (payload.account && typeof payload.account === 'object') return [payload.account];
+  return [];
+}
+
+async function requestJson(url, options = {}) {
+  const response = await fetch(url, options);
+  const text = await response.text();
+  let payload = {};
+
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      payload = { raw: text };
+    }
+  }
+
+  if (!response.ok) {
+    const message =
+      payload?.errors?.[0]?.message ||
+      payload?.error?.message ||
+      payload?.message ||
+      `Deriv request failed with status ${response.status}.`;
+    throw new Error(message);
+  }
+
+  return payload;
 }
 
 class DerivDigitBot extends EventEmitter {
@@ -74,7 +120,9 @@ class DerivDigitBot extends EventEmitter {
     this.options = {
       mode: options.mode || 'demo',
       token: options.token || '',
-      endpoint: options.endpoint || 'wss://ws.derivws.com/websockets/v3?app_id=1089',
+      apiBaseUrl: options.apiBaseUrl || DEFAULT_API_BASE_URL,
+      accountId: options.accountId || '',
+      appId: options.appId || '1089',
       symbol: options.symbol || 'R_100',
       currency: options.currency || 'USD',
       seed: roundMoney(toNumber(options.seed, 10)),
@@ -157,8 +205,27 @@ class DerivDigitBot extends EventEmitter {
   }
 
   async connectDeriv() {
+    const account = await this.resolveAccount();
+    const otp = await this.requestOtp(account.account_id);
+    const wsUrl = String(otp?.data?.url || '').trim();
+
+    if (!wsUrl) {
+      throw new Error('Deriv did not return a WebSocket URL.');
+    }
+
+    this.accountKind = accountTypeFromAccount(account);
+    this.accountBalance = roundMoney(toNumber(account.balance, this.accountBalance ?? this.balance));
+    this.balance = roundMoney(toNumber(account.balance, this.balance));
+    this.emit('account', {
+      accountId: account.account_id,
+      loginid: account.loginid || account.account_id,
+      currency: account.currency,
+      balance: this.accountBalance,
+      accountKind: this.accountKind
+    });
+
     await new Promise((resolve, reject) => {
-      this.ws = new WebSocket(this.options.endpoint);
+      this.ws = new WebSocket(wsUrl);
 
       const openTimeout = setTimeout(() => {
         reject(new Error('Timed out connecting to Deriv WebSocket.'));
@@ -180,24 +247,6 @@ class DerivDigitBot extends EventEmitter {
       });
     });
 
-    const auth = await this.send({ authorize: this.options.token });
-    this.accountKind = accountKindFromAuthorize(auth.authorize);
-    if (this.accountKind !== this.options.mode) {
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        this.ws.close(1000, 'account_mode_mismatch');
-      }
-      throw new Error(
-        `Selected ${this.options.mode} mode, but the token authorized a ${this.accountKind} account. ` +
-        'Use a token from the matching Deriv account.'
-      );
-    }
-
-    this.emit('account', {
-      loginid: auth.authorize && auth.authorize.loginid,
-      currency: auth.authorize && auth.authorize.currency,
-      accountKind: this.accountKind
-    });
-
     await this.send({ balance: 1, subscribe: 1 });
     await this.send({ ticks: this.options.symbol, subscribe: 1 });
 
@@ -206,6 +255,83 @@ class DerivDigitBot extends EventEmitter {
         this.ws.send(JSON.stringify({ ping: 1 }));
       }
     }, 30000);
+  }
+
+  apiRequest(path, { method = 'GET', body, extraHeaders = {} } = {}) {
+    const headers = {
+      'Deriv-App-ID': this.options.appId,
+      Authorization: `Bearer ${this.options.token}`,
+      ...extraHeaders
+    };
+
+    if (body !== undefined) {
+      headers['Content-Type'] = 'application/json';
+    }
+
+    return requestJson(joinUrl(this.options.apiBaseUrl, path), {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined
+    });
+  }
+
+  async fetchAccounts() {
+    const payload = await this.apiRequest('/trading/v1/options/accounts');
+    const accounts = normalizeAccountList(payload);
+    return accounts.map((account) => ({
+      ...account,
+      accountType: accountTypeFromAccount(account)
+    }));
+  }
+
+  pickAccount(accounts) {
+    const requestedId = String(this.options.accountId || '').trim();
+    const requestedType = this.options.mode;
+
+    if (!accounts.length) {
+      throw new Error('Deriv did not return any Options accounts for this token.');
+    }
+
+    if (requestedId) {
+      const exact = accounts.find((account) => String(account.account_id || '').trim() === requestedId);
+      if (!exact) {
+        const availableIds = accounts.map((account) => account.account_id).filter(Boolean).join(', ');
+        throw new Error(
+          `Account ID ${requestedId} was not returned for this token. Available accounts: ${availableIds || 'none'}.`
+        );
+      }
+
+      if (accountTypeFromAccount(exact) !== requestedType) {
+        throw new Error(
+          `Selected account ${requestedId} is ${accountTypeFromAccount(exact)}, but the dashboard is set to ${requestedType}.`
+        );
+      }
+
+      return exact;
+    }
+
+    const matching = accounts.filter((account) => accountTypeFromAccount(account) === requestedType);
+    const activeMatching = matching.find((account) => String(account.status || '').toLowerCase() === 'active');
+
+    if (activeMatching) return activeMatching;
+    if (matching.length) return matching[0];
+
+    const available = accounts.map((account) => `${account.account_id} (${accountTypeFromAccount(account)})`).join(', ');
+    throw new Error(
+      `No ${requestedType} Options account is available for this token. Available accounts: ${available || 'none'}.`
+    );
+  }
+
+  async resolveAccount() {
+    const accounts = await this.fetchAccounts();
+    const account = this.pickAccount(accounts);
+    return account;
+  }
+
+  async requestOtp(accountId) {
+    return this.apiRequest(`/trading/v1/options/accounts/${encodeURIComponent(accountId)}/otp`, {
+      method: 'POST'
+    });
   }
 
   send(payload, timeoutMs = 15000) {
@@ -607,6 +733,8 @@ class DerivDigitBot extends EventEmitter {
     this.emit('status', {
       status,
       mode: this.options.mode,
+      accountId: this.options.accountId || null,
+      accountKind: this.accountKind,
       symbol: this.options.symbol,
       phase: this.phase,
       seed: this.options.seed,
@@ -646,6 +774,8 @@ class DerivDigitBot extends EventEmitter {
       startedAt: this.startedAt && this.startedAt.toISOString(),
       stoppedAt: new Date().toISOString(),
       mode: this.options.mode,
+      accountId: this.options.accountId || null,
+      accountKind: this.accountKind,
       symbol: this.options.symbol,
       totalTrades: this.totalTrades,
       wins: this.wins,

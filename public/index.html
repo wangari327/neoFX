@@ -510,7 +510,13 @@
         <div class="field">
           <label for="token">Deriv API Token</label>
           <input id="token" type="password" autocomplete="off" placeholder="Leave blank to use .env token">
-          <div id="tokenHelp" class="field-help">Store demo and real tokens in <code>.env</code> or paste one here for a single run.</div>
+          <div id="tokenHelp" class="field-help">Use one authorization token for both demo and real accounts. The mode switch chooses the account type, not the token.</div>
+        </div>
+
+        <div class="field">
+          <label for="accountId">Deriv Account ID <span class="muted">(optional)</span></label>
+          <input id="accountId" type="text" autocomplete="off" placeholder="Leave blank to auto-pick by mode">
+          <div class="field-help">If you have more than one demo or real account, enter the exact account ID here. Otherwise the bot picks the first active account for the selected mode.</div>
         </div>
 
         <div class="inline">
@@ -615,6 +621,7 @@
 
     const el = {
       token: document.getElementById('token'),
+      accountId: document.getElementById('accountId'),
       seed: document.getElementById('seed'),
       target: document.getElementById('target'),
       mode: document.getElementById('mode'),
@@ -923,6 +930,7 @@
 
       socket.emit('start_bot', {
         token: el.token.value,
+        accountId: el.accountId.value,
         seed: currentSeed,
         target: currentTarget,
         mode: el.mode.value,
@@ -950,14 +958,10 @@
       if (config.defaultMode) el.mode.value = config.defaultMode;
       el.guideFilters.checked = Boolean(config.guideFilters);
       el.strictBars.checked = Boolean(config.strictBarFilters);
-      if (config.hasEnvToken || config.hasDemoEnvToken || config.hasRealEnvToken) {
-        const envModes = [];
-        if (config.hasEnvToken) envModes.push('fallback');
-        if (config.hasDemoEnvToken) envModes.push('demo');
-        if (config.hasRealEnvToken) envModes.push('real');
-        el.tokenHelp.innerHTML = `Loaded from <code>.env</code>: ${envModes.join(' and ')} token${envModes.length > 1 ? 's' : ''}. Paste a token only if you want a one-off override.`;
+      if (config.hasEnvToken) {
+        el.tokenHelp.innerHTML = 'A Deriv authorization token is loaded from <code>.env</code>. Use the mode switch to choose the account type, and fill <em>Account ID</em> only if you want to pin a specific account.';
       } else {
-        el.tokenHelp.innerHTML = 'Store demo and real tokens in <code>.env</code> or paste one here for a single run.';
+        el.tokenHelp.innerHTML = 'Store one Deriv authorization token in <code>.env</code> or paste one here for a single run.';
       }
     });
 

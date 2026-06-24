@@ -19,7 +19,7 @@ apt-get install -y ca-certificates curl git ufw tar build-essential
 need_node_install=1
 if command -v node >/dev/null 2>&1; then
   current_major="$(node -p "process.versions.node.split('.')[0]" 2>/dev/null || echo 0)"
-  if [[ "${current_major}" =~ ^[0-9]+$ ]] && [[ "${current_major}" -ge 20 ]]; then
+  if [[ "${current_major}" =~ ^[0-9]+$ ]] && [[ "${current_major}" -ge "${NODE_MAJOR}" ]]; then
     need_node_install=0
   fi
 fi
