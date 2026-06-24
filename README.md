@@ -102,7 +102,32 @@ Create your token in the Deriv dashboard:
 
 The current API docs treat the token as general authorization, not as the demo/real switch. The bot uses the token to request your account list, then it selects a demo or real account by account type and requests an OTP for that account. If you know the exact account ID you want, put it in `DERIV_ACCOUNT_ID`.
 
-## DigitalOcean Deployment
+## Heroku Deployment
+
+This repo now includes a `Procfile` and `app.json`, so you can deploy it with Heroku’s button flow instead of rebuilding a VPS every time you change a line.
+
+[![Deploy to Heroku](https://www.herokucdn.com/deploy/button.svg)](https://heroku.com/deploy?template=https://github.com/wangari327/neoFX)
+
+Heroku Button will prompt for the required config vars, then create the app from this repo. After the first deploy, keep iterating by pushing to GitHub and letting Heroku’s GitHub integration redeploy the `main` branch, or by using `git push heroku main`.
+
+Quick manual setup:
+
+```bash
+heroku login
+heroku create your-app-name
+heroku config:set DERIV_API_TOKEN=your_token_here
+heroku config:set DASHBOARD_PASSWORD=choose-a-strong-password
+heroku git:remote -a your-app-name
+git push heroku main
+```
+
+Open the app at:
+
+```text
+https://YOUR-APP.herokuapp.com
+```
+
+## DigitalOcean Deployment (Optional)
 
 DigitalOcean pricing and size names can change. As of the current docs, Droplets start from low monthly tiers, and `doctl compute droplet create` requires a size and image flag. Check the price shown in your DigitalOcean account before creating the server.
 

@@ -1,0 +1,100 @@
+{
+  "name": "Deriv Digit Bot",
+  "description": "Plain JavaScript Deriv Digit Over/Under bot with a realtime dashboard.",
+  "repository": "https://github.com/wangari327/neoFX",
+  "website": "https://github.com/wangari327/neoFX",
+  "success_url": "/",
+  "keywords": [
+    "node",
+    "express",
+    "socket.io",
+    "deriv",
+    "trading"
+  ],
+  "stack": "heroku-24",
+  "formation": {
+    "web": {
+      "quantity": 1,
+      "size": "eco"
+    }
+  },
+  "env": {
+    "DERIV_API_TOKEN": {
+      "description": "Deriv authorization token with trade scope.",
+      "required": true
+    },
+    "DERIV_ACCOUNT_ID": {
+      "description": "Optional Deriv account ID to pin a specific demo or real account.",
+      "required": false
+    },
+    "DEFAULT_MODE": {
+      "description": "Default account mode shown when the dashboard opens.",
+      "value": "demo",
+      "required": false
+    },
+    "DERIV_APP_ID": {
+      "description": "Deriv app ID used for REST and OTP requests.",
+      "value": "1089",
+      "required": false
+    },
+    "DERIV_API_BASE_URL": {
+      "description": "Deriv REST base URL.",
+      "value": "https://api.derivws.com",
+      "required": false
+    },
+    "DASHBOARD_USER": {
+      "description": "Basic-auth username for the dashboard.",
+      "value": "admin",
+      "required": false
+    },
+    "DASHBOARD_PASSWORD": {
+      "description": "Basic-auth password for the dashboard. Set this before exposing the app publicly.",
+      "required": true
+    },
+    "SYMBOL": {
+      "description": "Trading symbol to monitor.",
+      "value": "R_100",
+      "required": false
+    },
+    "CURRENCY": {
+      "description": "Trading currency.",
+      "value": "USD",
+      "required": false
+    },
+    "MIN_STAKE": {
+      "description": "Minimum stake in account currency.",
+      "value": "0.35",
+      "required": false
+    },
+    "BASE_STAKE_PERCENT": {
+      "description": "Growth mode stake as a fraction of session balance.",
+      "value": "0.02",
+      "required": false
+    },
+    "RISKY_STAKE_PERCENT": {
+      "description": "Risky jump stake as a fraction of session balance.",
+      "value": "0.35",
+      "required": false
+    },
+    "MARTINGALE_CAP_PERCENT": {
+      "description": "Maximum martingale stake as a fraction of remaining balance.",
+      "value": "0.40",
+      "required": false
+    },
+    "WINDOW_SIZE": {
+      "description": "Digits to track when comparing Over 1 and Under 8 frequency.",
+      "value": "20",
+      "required": false
+    },
+    "GUIDE_FILTERS": {
+      "description": "Enable the extra entry filters from the strategy notes.",
+      "value": "true",
+      "required": false
+    },
+    "STRICT_BAR_FILTERS": {
+      "description": "Enable the stricter bar filters for entries.",
+      "value": "false",
+      "required": false
+    }
+  }
+}
