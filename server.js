@@ -56,7 +56,7 @@ function normalizeMilestoneList(value, fallback = [0.25, 0.5, 0.75]) {
     .map((item) => {
       const numeric = Number(item);
       if (!Number.isFinite(numeric)) return null;
-      return Math.min(Math.max(numeric > 1 ? numeric / 100 : numeric, 0), 1);
+      return Math.min(Math.max(numeric > 1 || numeric < -1 ? numeric / 100 : numeric, -1), 1);
     })
     .filter((item) => item !== null);
 
@@ -70,6 +70,10 @@ function normalizeMilestoneList(value, fallback = [0.25, 0.5, 0.75]) {
   }
 
   return deduped.sort((a, b) => a - b);
+}
+
+function blindSniperLimit(milestones) {
+  return Math.max(1, Array.isArray(milestones) ? milestones.length : 0);
 }
 
 function basicAuthValid(headers) {
@@ -117,9 +121,9 @@ function publicConfig() {
     initialStake: optionalNumberFrom(process.env.INITIAL_STAKE, null),
     blindSniperEnabled: boolFrom(process.env.BLIND_SNIPER_ENABLED, false),
     blindSniperCadenceTrades: numberFrom(process.env.BLIND_SNIPER_CADENCE_TRADES, 3),
-    blindSniperMaxUses: numberFrom(process.env.BLIND_SNIPER_MAX_USES, 3),
     blindSniperStartRatio: blindSniperMilestones[blindSniperMilestones.length - 1] ?? blindSniperStartRatio,
     blindSniperMilestones,
+    blindSniperMaxUses: Math.max(1, blindSniperMilestones.length),
     blindSniperStakeFraction: numberFrom(process.env.BLIND_SNIPER_STAKE_FRACTION, 1 / 3),
     hasEnvToken: Boolean(
       process.env.DERIV_API_TOKEN ||
@@ -196,7 +200,7 @@ function sanitizeStartPayload(payload = {}) {
     strictBarFilters: boolFrom(payload.strictBarFilters, boolFrom(process.env.STRICT_BAR_FILTERS, false)),
     blindSniperEnabled: boolFrom(payload.blindSniperEnabled, boolFrom(process.env.BLIND_SNIPER_ENABLED, false)),
     blindSniperCadenceTrades: numberFrom(payload.blindSniperCadenceTrades, numberFrom(process.env.BLIND_SNIPER_CADENCE_TRADES, 3)),
-    blindSniperMaxUses: numberFrom(payload.blindSniperMaxUses, numberFrom(process.env.BLIND_SNIPER_MAX_USES, 3)),
+    blindSniperMaxUses: blindSniperLimit(blindSniperMilestones),
     blindSniperStartRatio,
     blindSniperMilestones,
     blindSniperStakeFraction: numberFrom(payload.blindSniperStakeFraction, numberFrom(process.env.BLIND_SNIPER_STAKE_FRACTION, 1 / 3))
@@ -249,12 +253,24 @@ function summarizeRun(run, reason = run?.reason || 'manual') {
     target: Number(run.target ?? run.config?.target ?? seed),
     blindSniperEnabled: Boolean(snapshot.blindSniperEnabled ?? run.blindSniperEnabled ?? run.config?.blindSniperEnabled ?? false),
     blindSniperUses: Number(snapshot.blindSniperUses ?? run.blindSniperUses ?? run.config?.blindSniperUses ?? 0),
-    blindSniperMaxUses: Number(snapshot.blindSniperMaxUses ?? run.blindSniperMaxUses ?? run.config?.blindSniperMaxUses ?? 3),
     blindSniperMilestones: normalizeMilestoneList(
       snapshot.blindSniperMilestones ?? run.blindSniperMilestones ?? run.config?.blindSniperMilestones ?? null,
       [0.25, 0.5, Number(snapshot.blindSniperStartRatio ?? run.blindSniperStartRatio ?? run.config?.blindSniperStartRatio ?? 0.75)]
     ),
-    blindSniperProgress: Number(snapshot.blindSniperProgress ?? run.blindSniperProgress ?? 0),
+    blindSniperMaxUses: blindSniperLimit(
+      normalizeMilestoneList(
+        snapshot.blindSniperMilestones ?? run.blindSniperMilestones ?? run.config?.blindSniperMilestones ?? null,
+        [0.25, 0.5, Number(snapshot.blindSniperStartRatio ?? run.blindSniperStartRatio ?? run.config?.blindSniperStartRatio ?? 0.75)]
+      )
+    ),
+    blindSniperProgress: Math.max(
+      -1,
+      Math.min(
+        1,
+        (Number(snapshot.effectiveGrowthBalance ?? run.effectiveGrowthBalance ?? finalBalance) - seed) /
+          Math.max(0.01, Number(run.target ?? run.config?.target ?? seed) - seed)
+      )
+    ),
     blindSniperNextMilestone: snapshot.blindSniperNextMilestone ?? run.blindSniperNextMilestone ?? null
   };
 }
@@ -325,18 +341,21 @@ function runBalanceState(run) {
   const blindSniperEnabled = Boolean(snapshot.blindSniperEnabled ?? run.blindSniperEnabled ?? run.config?.blindSniperEnabled ?? false);
   const blindSniperUses = Number(snapshot.blindSniperUses ?? run.blindSniperUses ?? run.config?.blindSniperUses ?? 0);
   const blindSniperCadenceTrades = Number(snapshot.blindSniperCadenceTrades ?? run.blindSniperCadenceTrades ?? run.config?.blindSniperCadenceTrades ?? 3);
-  const blindSniperMaxUses = Number(snapshot.blindSniperMaxUses ?? run.blindSniperMaxUses ?? run.config?.blindSniperMaxUses ?? 3);
   const blindSniperStartRatio = Number(snapshot.blindSniperStartRatio ?? run.blindSniperStartRatio ?? run.config?.blindSniperStartRatio ?? 0.75);
   const blindSniperMilestones = normalizeMilestoneList(
     snapshot.blindSniperMilestones ?? run.blindSniperMilestones ?? run.config?.blindSniperMilestones ?? null,
     [0.25, 0.5, blindSniperStartRatio]
   );
+  const blindSniperMaxUses = blindSniperLimit(blindSniperMilestones);
   const blindSniperStakeFraction = Number(snapshot.blindSniperStakeFraction ?? run.blindSniperStakeFraction ?? run.config?.blindSniperStakeFraction ?? 1 / 3);
   const blindSniperTradesSinceLastShot = Number(snapshot.blindSniperTradesSinceLastShot ?? run.blindSniperTradesSinceLastShot ?? run.config?.blindSniperTradesSinceLastShot ?? 0);
-  const blindSniperProgress = Math.max(0, Math.min(1, (balance - seed) / Math.max(0.01, target - seed)));
-  const blindSniperMilestoneIndex = Math.min(blindSniperUses, Math.max(0, blindSniperMilestones.length - 1));
-  const blindSniperNextMilestone = blindSniperMilestones[blindSniperMilestoneIndex] ?? blindSniperStartRatio;
-  const blindSniperUsesRemaining = Math.max(0, Math.min(blindSniperMaxUses, blindSniperMilestones.length) - blindSniperUses);
+  const effectiveGrowthBalance = Number(snapshot.effectiveGrowthBalance ?? run.effectiveGrowthBalance ?? balance);
+  const blindSniperProgress = Math.max(-1, Math.min(1, (effectiveGrowthBalance - seed) / Math.max(0.01, target - seed)));
+  const blindSniperMilestoneIndex = blindSniperMilestones.filter((milestone) => blindSniperProgress >= milestone).length;
+  const blindSniperNextMilestone = blindSniperMilestoneIndex < blindSniperMilestones.length
+    ? blindSniperMilestones[blindSniperMilestoneIndex]
+    : null;
+  const blindSniperUsesRemaining = Math.max(0, blindSniperMaxUses - blindSniperUses);
   const blindSniperTradesUntilShot = Math.max(0, blindSniperCadenceTrades - blindSniperTradesSinceLastShot);
   const blindSniperArmed =
     blindSniperEnabled &&
@@ -399,7 +418,8 @@ function runBalanceState(run) {
     blindSniperProgress,
     blindSniperArmed,
     blindSniperNextMilestone,
-    blindSniperReason
+    blindSniperReason,
+    blindSniperMaxUses: Math.max(1, blindSniperMilestones.length)
   };
 }
 

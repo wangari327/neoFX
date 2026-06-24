@@ -846,8 +846,8 @@
 
             <div class="field">
               <label for="blindSniperMarks">Sniper marks <span class="muted">(optional)</span></label>
-              <input id="blindSniperMarks" type="text" autocomplete="off" placeholder="25, 50, 75">
-              <div class="field-help">Comma-separated progress marks in percent. Leave blank to use 25, 50, and 75.</div>
+              <input id="blindSniperMarks" type="text" autocomplete="off" placeholder="-50, -25, 25, 50, 75">
+              <div class="field-help">Comma-separated progress marks in percent. Use negatives for recovery marks below seed. Leave blank to use 25, 50, and 75.</div>
             </div>
           </div>
         </details>
@@ -1118,7 +1118,7 @@
         .map((item) => {
           const numeric = Number(item);
           if (!Number.isFinite(numeric)) return null;
-          return Math.min(Math.max(numeric > 1 ? numeric / 100 : numeric, 0), 1);
+          return Math.min(Math.max(numeric > 1 || numeric < -1 ? numeric / 100 : numeric, -1), 1);
         })
         .filter((item) => item !== null);
 
@@ -1173,12 +1173,16 @@
 
       if (usesRemaining <= 0) return 'Blind sniper quota used';
       if (event.blindSniperArmed) return `Blind sniper armed (${usesRemaining}/${maxUses} uses left)`;
-      if (reason === 'progress_wait') return `Blind sniper waiting for ${nextPct}%+`;
+      if (reason === 'progress_wait') return progressPct < 0
+        ? `Blind sniper waiting recovery at ${nextPct}%+`
+        : `Blind sniper waiting for ${nextPct}%+`;
       if (reason === 'cadence_wait') return `Blind sniper ready, ${tradesUntilShot} trade(s) away`;
       if (reason === 'recovery_blocked') return 'Blind sniper waiting for split recovery to clear';
       if (reason === 'phase_blocked') return 'Blind sniper waiting for an offensive phase';
       if (reason === 'disabled') return 'Blind sniper off';
-      return `Blind sniper ${progressPct}% to target`;
+      return progressPct < 0
+        ? `Blind sniper recovery ${progressPct}%`
+        : `Blind sniper ${progressPct}% to target`;
     }
 
     function setControlState(status) {
@@ -1446,15 +1450,20 @@
       const blindSniperEnabled = Boolean(snapshot.blindSniperEnabled ?? run.blindSniperEnabled ?? config.blindSniperEnabled ?? false);
       const blindSniperUses = Number(snapshot.blindSniperUses ?? run.blindSniperUses ?? config.blindSniperUses ?? 0);
       const blindSniperCadenceTrades = Number(snapshot.blindSniperCadenceTrades ?? run.blindSniperCadenceTrades ?? config.blindSniperCadenceTrades ?? 3);
-      const blindSniperMaxUses = Number(snapshot.blindSniperMaxUses ?? run.blindSniperMaxUses ?? config.blindSniperMaxUses ?? 3);
+      const effectiveGrowthBalance = Number(snapshot.effectiveGrowthBalance ?? run.effectiveGrowthBalance ?? balance);
       const blindSniperMilestones = normalizeMilestoneList(
         snapshot.blindSniperMilestones ?? run.blindSniperMilestones ?? config.blindSniperMilestones ?? null,
         [0.25, 0.5, Number(snapshot.blindSniperStartRatio ?? run.blindSniperStartRatio ?? config.blindSniperStartRatio ?? 0.75)]
       );
+      const blindSniperMaxUses = Math.max(
+        1,
+        blindSniperMilestones.length,
+        Number(snapshot.blindSniperMaxUses ?? run.blindSniperMaxUses ?? config.blindSniperMaxUses ?? 0)
+      );
       const blindSniperStartRatio = Number(snapshot.blindSniperStartRatio ?? run.blindSniperStartRatio ?? config.blindSniperStartRatio ?? blindSniperMilestones[blindSniperMilestones.length - 1] ?? 0.75);
       const blindSniperStakeFraction = Number(snapshot.blindSniperStakeFraction ?? run.blindSniperStakeFraction ?? config.blindSniperStakeFraction ?? 1 / 3);
       const blindSniperTradesSinceLastShot = Number(snapshot.blindSniperTradesSinceLastShot ?? run.blindSniperTradesSinceLastShot ?? config.blindSniperTradesSinceLastShot ?? 0);
-      const blindSniperProgress = Math.max(0, Math.min(1, (balance - seed) / Math.max(0.01, target - seed)));
+      const blindSniperProgress = Math.max(-1, Math.min(1, (effectiveGrowthBalance - seed) / Math.max(0.01, target - seed)));
       const blindSniperMilestoneIndex = Math.min(blindSniperUses, Math.max(0, blindSniperMilestones.length - 1));
       const blindSniperNextMilestone = Number(
         snapshot.blindSniperNextMilestone ??
@@ -1462,7 +1471,7 @@
         blindSniperMilestones[blindSniperMilestoneIndex] ??
         blindSniperStartRatio
       );
-      const blindSniperUsesRemaining = Math.max(0, Math.min(blindSniperMaxUses, blindSniperMilestones.length) - blindSniperUses);
+      const blindSniperUsesRemaining = Math.max(0, blindSniperMaxUses - blindSniperUses);
       const blindSniperTradesUntilShot = Math.max(0, blindSniperCadenceTrades - blindSniperTradesSinceLastShot);
       const blindSniperArmed =
         blindSniperEnabled &&
@@ -1652,7 +1661,7 @@
       el.growthTierText.textContent = 'Growth tier 0';
       el.growthFloorText.textContent = `Growth floor ${money(currentMinStake)}`;
       el.sniperText.textContent = 'Blind sniper off';
-      el.progressMarker.title = `Session equity ${money(currentSeed)}`;
+      el.progressMarker.title = `Growth balance ${money(currentSeed)} (0.0%)`;
       el.lastTradeText.textContent = 'Warming up...';
       el.lastTradeText.style.color = 'var(--muted)';
       drawEquityChart();
@@ -1753,8 +1762,8 @@
       ctx.fillText(money(currentTarget), 14, toY(currentTarget) - 6);
     }
 
-    function appendEquity(balance, tradeDelta) {
-      const next = Number(balance);
+    function appendEquity(balance, tradeDelta, growthBalance = balance) {
+      const next = Number(growthBalance);
       if (!Number.isFinite(next)) return;
       if (lastSeriesBalance === null || Math.abs(next - lastSeriesBalance) > 0.0001) {
         equityHistory.push(next);
@@ -1767,7 +1776,8 @@
         ? Number(tradeDelta)
         : (Number.isFinite(lastRenderedBalance) ? next - lastRenderedBalance : 0);
       const span = Math.max(0.01, currentTarget - currentSeed);
-      const pct = Math.max(0, Math.min(100, ((next - currentSeed) / span) * 100));
+      const pct = ((next - currentSeed) / span) * 100;
+      const pctClamped = Math.max(0, Math.min(100, pct));
 
       el.equityValue.textContent = money(next);
       el.equityDelta.textContent = signedMoney(delta);
@@ -1777,8 +1787,8 @@
         el.equityDelta.classList.remove('pulse');
       }, 420);
 
-      el.progressBar.style.width = `${pct}%`;
-      el.progressMarker.style.left = `${pct}%`;
+      el.progressBar.style.width = `${pctClamped}%`;
+      el.progressMarker.style.left = `${pctClamped}%`;
       el.progressMarker.classList.remove('win', 'loss');
       el.progressMarker.classList.add(delta >= 0 ? 'win' : 'loss');
       el.progressBar.style.background = delta >= 0
@@ -1787,7 +1797,7 @@
       el.progressText.textContent = `${pct.toFixed(1)}%`;
       el.progressStart.textContent = money(currentSeed);
       el.progressTarget.textContent = money(currentTarget);
-      el.progressMarker.title = `Session equity ${money(next)}`;
+      el.progressMarker.title = `Growth balance ${money(next)} (${pct.toFixed(1)}%)`;
     }
 
     function updateStats(event, tradeDelta, source) {
@@ -1797,6 +1807,9 @@
       const accountBalanceValue = Number.isFinite(Number(event.accountBalance))
         ? Number(event.accountBalance)
         : lastKnownAccountBalance;
+      const growthBalance = Number.isFinite(Number(event.effectiveGrowthBalance))
+        ? Number(event.effectiveGrowthBalance)
+        : balance;
       currentSeed = seed;
       currentTarget = target;
       const gateFloor = Number(event.riskFloor || seed);
@@ -1838,10 +1851,13 @@
       }
 
       const profitLoss = balance - seed;
+      const growthProfitLoss = growthBalance - seed;
       const delta = Number.isFinite(tradeDelta)
         ? Number(tradeDelta)
-        : (Number.isFinite(lastRenderedBalance) ? balance - lastRenderedBalance : 0);
-      const shouldAnimate = source === 'trade' || Math.abs(balance - lastRenderedBalance) > 0.0001;
+        : (Number.isFinite(lastRenderedBalance) ? growthBalance - lastRenderedBalance : 0);
+      const shouldAnimate = source === 'trade' || Math.abs(growthBalance - lastRenderedBalance) > 0.0001;
+      const growthProgress = ((growthBalance - seed) / Math.max(0.01, currentTarget - currentSeed)) * 100;
+      const growthProgressClamped = Math.max(0, Math.min(100, growthProgress));
 
       el.balance.textContent = maybeMoney(accountBalanceValue);
       el.phase.textContent = phaseName(event.phase);
@@ -1851,12 +1867,23 @@
       el.profitLoss.style.color = profitLoss >= 0 ? 'var(--green)' : 'var(--red)';
       if (shouldAnimate) {
         flashNode(el.profitLoss, profitLoss >= 0 ? 'win' : 'loss');
-        appendEquity(balance, delta);
+        appendEquity(balance, delta, growthBalance);
       } else {
+        el.equityValue.textContent = money(growthBalance);
+        el.equityDelta.textContent = signedMoney(growthBalance - lastRenderedBalance);
+        el.equityDelta.classList.remove('win', 'loss', 'pulse');
+        el.equityDelta.classList.add((growthBalance - lastRenderedBalance) >= 0 ? 'win' : 'loss');
         el.progressStart.textContent = money(currentSeed);
         el.progressTarget.textContent = money(currentTarget);
-        el.progressText.textContent = `${Math.max(0, Math.min(100, ((balance - currentSeed) / Math.max(0.01, currentTarget - currentSeed)) * 100)).toFixed(1)}%`;
-        el.progressMarker.title = `Session equity ${money(balance)}`;
+        el.progressBar.style.width = `${growthProgressClamped}%`;
+        el.progressMarker.style.left = `${growthProgressClamped}%`;
+        el.progressMarker.classList.remove('win', 'loss');
+        el.progressMarker.classList.add((growthBalance - lastRenderedBalance) >= 0 ? 'win' : 'loss');
+        el.progressBar.style.background = (growthBalance - lastRenderedBalance) >= 0
+          ? 'linear-gradient(90deg, rgba(72, 199, 116, 0.92), rgba(73, 182, 214, 0.92))'
+          : 'linear-gradient(90deg, rgba(255, 95, 87, 0.92), rgba(244, 197, 66, 0.88))';
+        el.progressText.textContent = `${growthProgress.toFixed(1)}%`;
+        el.progressMarker.title = `Growth balance ${money(growthBalance)} (${growthProgress.toFixed(1)}%)`;
       }
 
       el.recoveryText.textContent = splitRecoveryArmed
@@ -1884,7 +1911,7 @@
       if (Number.isFinite(accountBalanceValue)) {
         lastKnownAccountBalance = accountBalanceValue;
       }
-      lastRenderedBalance = balance;
+      lastRenderedBalance = growthBalance;
       lastRenderedTrades = Number(event.totalTrades || lastRenderedTrades);
     }
 

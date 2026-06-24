@@ -64,7 +64,7 @@ function normalizeMilestoneList(value, fallback = [0.25, 0.5, 0.75]) {
     .map((item) => {
       const numeric = Number(item);
       if (!Number.isFinite(numeric)) return null;
-      return clamp(numeric > 1 ? numeric / 100 : numeric, 0, 1);
+      return clamp(numeric > 1 || numeric < -1 ? numeric / 100 : numeric, -1, 1);
     })
     .filter((item) => item !== null);
 
@@ -200,6 +200,7 @@ class DerivDigitBot extends EventEmitter {
     this.options.blindSniperStartRatio =
       this.options.blindSniperMilestones[this.options.blindSniperMilestones.length - 1] ??
       this.options.blindSniperStartRatio;
+    this.options.blindSniperMaxUses = Math.max(1, this.options.blindSniperMilestones.length);
 
     this.balance = this.options.seed;
     this.accountBalance = null;
@@ -531,7 +532,7 @@ class DerivDigitBot extends EventEmitter {
       blindSniperUsesRemaining: Math.max(0, this.options.blindSniperMaxUses - this.blindSniperUses),
       blindSniperTradesSinceLastShot: this.tradesSinceBlindSniper,
       blindSniperTradesUntilShot: Math.max(0, this.options.blindSniperCadenceTrades - this.tradesSinceBlindSniper),
-      blindSniperProgress: this.progressRatio(),
+      blindSniperProgress: this.sessionProgressRatio(),
       blindSniperArmed: this.blindSniperState().armed,
       martingaleLossStreak: this.martingaleLossStreak,
       splitRecoveryArmed: this.splitRecoveryArmed,
@@ -584,7 +585,27 @@ class DerivDigitBot extends EventEmitter {
 
   progressRatio() {
     const span = Math.max(0.01, this.options.target - this.options.seed);
-    return clamp((this.balance - this.options.seed) / span, 0, 1);
+    return clamp((this.effectiveGrowthBalance() - this.options.seed) / span, 0, 1);
+  }
+
+  sessionProgressRatio() {
+    const span = Math.max(0.01, this.options.target - this.options.seed);
+    return clamp((this.effectiveGrowthBalance() - this.options.seed) / span, -1, 1);
+  }
+
+  sniperProgressStage(progress = this.sessionProgressRatio()) {
+    const milestones = Array.isArray(this.options.blindSniperMilestones) && this.options.blindSniperMilestones.length
+      ? this.options.blindSniperMilestones
+      : [this.options.blindSniperStartRatio];
+    return milestones.filter((milestone) => progress >= milestone).length;
+  }
+
+  syncBlindSniperCursor(progress = this.sessionProgressRatio()) {
+    const stage = this.sniperProgressStage(progress);
+    if (stage < this.blindSniperUses) {
+      this.blindSniperUses = stage;
+    }
+    return stage;
   }
 
   effectiveGrowthBalance() {
@@ -597,15 +618,15 @@ class DerivDigitBot extends EventEmitter {
 
   blindSniperState() {
     const enabled = this.options.blindSniperEnabled;
-    const progress = this.progressRatio();
+    const progress = this.sessionProgressRatio();
     const milestones = Array.isArray(this.options.blindSniperMilestones) && this.options.blindSniperMilestones.length
       ? this.options.blindSniperMilestones
       : [this.options.blindSniperStartRatio];
-    const cappedUses = Math.min(this.options.blindSniperMaxUses, milestones.length);
-    const usesRemaining = Math.max(0, cappedUses - this.blindSniperUses);
+    const maxUses = Math.max(1, milestones.length);
+    const milestoneIndex = this.syncBlindSniperCursor(progress);
+    const usesRemaining = Math.max(0, maxUses - this.blindSniperUses);
     const tradesUntilShot = Math.max(0, this.options.blindSniperCadenceTrades - this.tradesSinceBlindSniper);
     const phaseReady = ![PHASES.MARTINGALE, PHASES.REBUILD, PHASES.STOPPED].includes(this.phase) && !this.splitRecoveryArmed;
-    const milestoneIndex = Math.min(this.blindSniperUses, Math.max(0, milestones.length - 1));
     const nextMilestone = milestones[milestoneIndex] ?? null;
     const armed =
       enabled &&
@@ -643,7 +664,7 @@ class DerivDigitBot extends EventEmitter {
       cadenceTrades: this.options.blindSniperCadenceTrades,
       tradesSinceLastShot: this.tradesSinceBlindSniper,
       tradesUntilShot,
-      maxUses: this.options.blindSniperMaxUses,
+      maxUses,
       startRatio: this.options.blindSniperStartRatio,
       stakeFraction: this.options.blindSniperStakeFraction
     };
@@ -995,6 +1016,13 @@ class DerivDigitBot extends EventEmitter {
     }
 
     if (
+      this.currentRecoveryDebt() > 0 &&
+      ![PHASES.MARTINGALE, PHASES.REBUILD, PHASES.STOPPED].includes(this.phase)
+    ) {
+      this.changePhase(PHASES.MARTINGALE, 'open_recovery_debt');
+    }
+
+    if (
       this.phase === PHASES.GROWTH &&
       !this.initialStakeUsed &&
       this.options.initialStake !== null &&
@@ -1124,7 +1152,6 @@ class DerivDigitBot extends EventEmitter {
     const plan = this.currentPlan || { kind: this.phase };
     this.currentPlan = null;
     this.tradeInFlight = false;
-    const sniperState = this.blindSniperState();
 
     this.totalTrades += 1;
     if (result.won) this.wins += 1;
@@ -1147,6 +1174,7 @@ class DerivDigitBot extends EventEmitter {
     }
 
     this.balance = roundMoney(this.balance + result.profit);
+    const sniperState = this.blindSniperState();
 
     const tradeEvent = {
       time: result.timestamp,
@@ -1177,7 +1205,7 @@ class DerivDigitBot extends EventEmitter {
       blindSniperUsesRemaining: Math.max(0, this.options.blindSniperMaxUses - this.blindSniperUses),
       blindSniperTradesSinceLastShot: this.tradesSinceBlindSniper,
       blindSniperTradesUntilShot: Math.max(0, this.options.blindSniperCadenceTrades - this.tradesSinceBlindSniper),
-      blindSniperProgress: this.progressRatio(),
+      blindSniperProgress: this.sessionProgressRatio(),
       blindSniperArmed: sniperState.armed,
       blindSniperMilestones: sniperState.milestones,
       blindSniperNextMilestone: sniperState.nextMilestone,
@@ -1224,27 +1252,55 @@ class DerivDigitBot extends EventEmitter {
 
     if (result.won) {
       this.martingaleLossStreak = 0;
+      const remainingDebt = this.currentRecoveryDebt();
       if (plan.kind === PHASES.RISKY) {
-        this.riskFloor = Math.max(this.riskFloor, this.effectiveGrowthBalance());
-        this.recoveryDebt = 0;
-        this.growthAnchorBalance = this.effectiveGrowthBalance();
-        this.clearSplitRecovery(null);
-        this.changePhase(PHASES.GROWTH, 'risky_jump_won_floor_locked');
+        if (remainingDebt <= 0) {
+          this.riskFloor = Math.max(this.riskFloor, this.effectiveGrowthBalance());
+          this.growthAnchorBalance = this.effectiveGrowthBalance();
+          this.clearSplitRecovery(null);
+          this.changePhase(PHASES.GROWTH, 'risky_jump_won_floor_locked');
+        } else {
+          if (this.phase !== PHASES.MARTINGALE) {
+            this.changePhase(PHASES.MARTINGALE, 'recovery_debt_still_open');
+          }
+          this.emitAnalysis(
+            'waiting_condition',
+            `Risky jump won, but $${remainingDebt.toFixed(2)} of recovery debt remains. The bot stays in recovery.`,
+            { plan, condition: result.condition }
+          );
+        }
         return;
       }
 
       if (plan.kind === PHASES.MARTINGALE || plan.kind === 'split_recovery') {
-        this.riskFloor = this.effectiveGrowthBalance();
-        this.recoveryDebt = 0;
-        this.growthAnchorBalance = this.effectiveGrowthBalance();
-        this.clearSplitRecovery(null);
-        this.changePhase(
-          PHASES.GROWTH,
-          plan.kind === PHASES.MARTINGALE ? 'martingale_recovered_to_growth' : 'split_recovery_complete'
+        if (remainingDebt <= 0) {
+          this.riskFloor = this.effectiveGrowthBalance();
+          this.growthAnchorBalance = this.effectiveGrowthBalance();
+          this.clearSplitRecovery(null);
+          this.changePhase(
+            PHASES.GROWTH,
+            plan.kind === PHASES.MARTINGALE ? 'martingale_recovered_to_growth' : 'split_recovery_complete'
+          );
+          return;
+        }
+
+        if (plan.kind === 'split_recovery' && this.splitRecoveryArmed && this.splitRecoveryPiecesRemaining > 0) {
+          this.splitRecoveryReadyAtTrade = this.totalTrades + this.options.splitRecoveryCooldownTrades;
+        }
+        if (this.phase !== PHASES.MARTINGALE) {
+          this.changePhase(PHASES.MARTINGALE, 'recovery_debt_still_open');
+        }
+        this.emitAnalysis(
+          'waiting_condition',
+          `Recovery win reduced the debt to $${remainingDebt.toFixed(2)}. The bot stays in recovery until the ledger clears.`,
+          { plan, condition: result.condition }
         );
         return;
       }
 
+      if (remainingDebt > 0 && this.phase !== PHASES.MARTINGALE && this.phase !== PHASES.REBUILD) {
+        this.changePhase(PHASES.MARTINGALE, 'open_recovery_debt_after_win');
+      }
       return;
     }
 
@@ -1339,7 +1395,7 @@ class DerivDigitBot extends EventEmitter {
       blindSniperStartRatio: sniperState.startRatio,
       blindSniperMilestones: sniperState.milestones,
       blindSniperStakeFraction: sniperState.stakeFraction,
-      blindSniperProgress: sniperState.progress,
+      blindSniperProgress: this.sessionProgressRatio(),
       blindSniperArmed: sniperState.armed,
       blindSniperNextMilestone: sniperState.nextMilestone,
       blindSniperReason: sniperState.reason,
@@ -1390,7 +1446,7 @@ class DerivDigitBot extends EventEmitter {
       blindSniperStartRatio: sniperState.startRatio,
       blindSniperMilestones: sniperState.milestones,
       blindSniperStakeFraction: sniperState.stakeFraction,
-      blindSniperProgress: sniperState.progress,
+      blindSniperProgress: this.sessionProgressRatio(),
       blindSniperArmed: sniperState.armed,
       blindSniperNextMilestone: sniperState.nextMilestone,
       blindSniperReason: sniperState.reason,
@@ -1440,7 +1496,7 @@ class DerivDigitBot extends EventEmitter {
       blindSniperStartRatio: sniperState.startRatio,
       blindSniperMilestones: sniperState.milestones,
       blindSniperStakeFraction: sniperState.stakeFraction,
-      blindSniperProgress: sniperState.progress,
+      blindSniperProgress: this.sessionProgressRatio(),
       blindSniperArmed: sniperState.armed,
       blindSniperNextMilestone: sniperState.nextMilestone,
       blindSniperReason: sniperState.reason,
@@ -1626,7 +1682,7 @@ class DerivDigitBot extends EventEmitter {
       blindSniperStartRatio: this.options.blindSniperStartRatio,
       blindSniperMilestones: this.options.blindSniperMilestones,
       blindSniperStakeFraction: this.options.blindSniperStakeFraction,
-      blindSniperProgress: this.progressRatio(),
+      blindSniperProgress: this.sessionProgressRatio(),
       blindSniperNextMilestone: this.blindSniperState().nextMilestone,
       totalTrades: this.totalTrades,
       wins: this.wins,
@@ -1635,7 +1691,9 @@ class DerivDigitBot extends EventEmitter {
       startingBalance: this.options.seed,
       finalBalance: this.balance,
       netProfit: roundMoney(this.balance - this.options.seed),
-      target: this.options.target
+      target: this.options.target,
+      blindSniperMaxUses: Math.max(1, Array.isArray(this.options.blindSniperMilestones) ? this.options.blindSniperMilestones.length : 0),
+      blindSniperProgress: this.sessionProgressRatio()
     };
   }
 
