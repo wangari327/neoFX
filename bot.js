@@ -165,6 +165,10 @@ class DerivDigitBot extends EventEmitter {
     this.contractWatchers = new Map();
     this.reqId = 1;
     this.pingTimer = null;
+    this.analysisState = {
+      key: '',
+      emittedAt: 0
+    };
   }
 
   async start() {
@@ -380,6 +384,28 @@ class DerivDigitBot extends EventEmitter {
   }
 
   emitAnalysis(stage, detail, extras = {}) {
+    const immediate = new Set(['connecting', 'listening', 'ready', 'signal_ready', 'placing_trade']);
+    const now = Date.now();
+    const key = [
+      stage,
+      extras.currentDigit ?? '',
+      extras.condition ? extras.condition.id : '',
+      extras.plan ? extras.plan.kind : '',
+      extras.tradeInFlight ? '1' : '0'
+    ].join('|');
+
+    if (!immediate.has(stage)) {
+      if (key === this.analysisState.key && now - this.analysisState.emittedAt < 2000) {
+        return;
+      }
+      if (now - this.analysisState.emittedAt < 1000 && this.analysisState.key.startsWith(stage)) {
+        return;
+      }
+    }
+
+    this.analysisState.key = key;
+    this.analysisState.emittedAt = now;
+
     this.emit('analysis', {
       time: new Date().toISOString(),
       stage,

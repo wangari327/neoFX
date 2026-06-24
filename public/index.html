@@ -617,7 +617,15 @@
 
   <script src="/socket.io/socket.io.js"></script>
   <script>
-    const socket = io();
+    const socket = io({
+      transports: ['websocket'],
+      upgrade: false,
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000
+    });
 
     const el = {
       token: document.getElementById('token'),
@@ -1029,6 +1037,12 @@
       if (event.status === 'running') setRunning(true);
     });
 
+    socket.on('connect', () => {
+      if (String(el.banner.textContent || '').startsWith('Realtime connection lost')) {
+        clearBanner();
+      }
+    });
+
     socket.on('analysis', (event) => {
       updateAnalysis(event);
     });
@@ -1082,6 +1096,10 @@
       setRunning(false);
     });
 
+    socket.on('disconnect', (reason) => {
+      showBanner('warn', `Realtime connection lost: ${reason}. Reconnecting...`);
+    });
+
     socket.on('bot_stopped', (summary) => {
       setRunning(false);
       const text = `Stopped: ${summary.reason}. Trades ${summary.totalTrades}, win rate ${summary.winRate}%, net ${money(summary.netProfit)}.`;
@@ -1092,7 +1110,6 @@
 
     socket.on('connect_error', (error) => {
       showBanner('danger', error.message || 'Socket connection failed');
-      setRunning(false);
     });
 
     resetEquityTrail();
