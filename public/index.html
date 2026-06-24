@@ -347,6 +347,21 @@
       font-size: 12px;
     }
 
+    .defaults-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      padding-top: 2px;
+    }
+
+    .defaults-state {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.3;
+      min-width: 0;
+    }
+
     .stats {
       display: grid;
       grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -716,6 +731,16 @@
         justify-content: flex-start;
       }
 
+      .defaults-row {
+        width: 100%;
+        align-items: stretch;
+      }
+
+      .defaults-row .ghost,
+      .defaults-state {
+        width: 100%;
+      }
+
       .toolbar {
         width: 100%;
         justify-content: space-between;
@@ -819,6 +844,12 @@
                 <option value="demo">Deriv Demo</option>
                 <option value="real">Deriv Real</option>
               </select>
+            </div>
+
+            <div class="defaults-row">
+              <button id="saveDefaultsBtn" class="ghost" type="button">Save as defaults</button>
+              <button id="resetDefaultsBtn" class="ghost" type="button">Reset to actual defaults</button>
+              <span id="defaultsState" class="defaults-state">Actual defaults active</span>
             </div>
           </div>
         </details>
@@ -1011,6 +1042,9 @@
       stopBtn: document.getElementById('stopBtn'),
       pauseBtn: document.getElementById('pauseBtn'),
       resumeBtn: document.getElementById('resumeBtn'),
+      saveDefaultsBtn: document.getElementById('saveDefaultsBtn'),
+      resetDefaultsBtn: document.getElementById('resetDefaultsBtn'),
+      defaultsState: document.getElementById('defaultsState'),
       liveViewBtn: document.getElementById('liveViewBtn'),
       refreshRunsBtn: document.getElementById('refreshRunsBtn'),
       statusPill: document.getElementById('statusPill'),
@@ -1064,11 +1098,14 @@
     let currentActiveRunId = null;
     let currentResumeRunId = null;
     let currentPersistenceBackend = 'memory';
+    let currentFactoryDefaults = null;
+    let currentSavedDefaults = null;
     let lastKnownAccountBalance = null;
     let equityHistory = [currentSeed];
     let lastSeriesBalance = currentSeed;
     let lastRenderedBalance = currentSeed;
     let lastRenderedTrades = 0;
+    const CONFIG_DEFAULTS_STORAGE_KEY = 'deriv-digit-bot.saved-config-defaults.v1';
 
     function money(value) {
       return `$${Number(value || 0).toFixed(2)}`;
@@ -1163,6 +1200,121 @@
     function optionalInputValue(value) {
       const numeric = parseOptionalNumber(value, null);
       return numeric === null ? '' : numeric;
+    }
+
+    function roundInputNumber(value, fallback = null) {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) return fallback;
+      return Math.round((numeric + Number.EPSILON) * 100) / 100;
+    }
+
+    function readSavedDefaults() {
+      try {
+        const raw = localStorage.getItem(CONFIG_DEFAULTS_STORAGE_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object') return null;
+        return parsed;
+      } catch {
+        return null;
+      }
+    }
+
+    function writeSavedDefaults(values) {
+      try {
+        localStorage.setItem(CONFIG_DEFAULTS_STORAGE_KEY, JSON.stringify(values));
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    function clearSavedDefaults() {
+      try {
+        localStorage.removeItem(CONFIG_DEFAULTS_STORAGE_KEY);
+      } catch {
+        // Ignore storage failures in private / restricted contexts.
+      }
+    }
+
+    function collectCurrentDefaults() {
+      const seed = roundInputNumber(el.seed.value, currentSeed);
+      const target = roundInputNumber(el.target.value, currentTarget);
+      return {
+        mode: el.mode.value === 'real' ? 'real' : 'demo',
+        accountId: String(el.accountId.value || '').trim(),
+        seed,
+        target,
+        guideFilters: Boolean(el.guideFilters.checked),
+        strictBars: Boolean(el.strictBars.checked),
+        growthStairsEnabled: Boolean(el.growthStairs.checked),
+        initialStake: optionalInputValue(el.initialStake.value),
+        blindSniperEnabled: Boolean(el.blindSniper.checked),
+        blindSniperMarks: normalizeMilestoneList(el.blindSniperMarks.value || currentBlindSniperMilestones, currentBlindSniperMilestones)
+      };
+    }
+
+    function applyDefaultsToControls(values = {}, { sync = true } = {}) {
+      if (!values || typeof values !== 'object') return;
+
+      if (Object.prototype.hasOwnProperty.call(values, 'mode')) {
+        el.mode.value = values.mode === 'real' ? 'real' : 'demo';
+      }
+      if (Object.prototype.hasOwnProperty.call(values, 'accountId')) {
+        el.accountId.value = String(values.accountId || '');
+      }
+      if (Object.prototype.hasOwnProperty.call(values, 'seed')) {
+        el.seed.value = roundInputNumber(values.seed, currentSeed);
+      }
+      if (Object.prototype.hasOwnProperty.call(values, 'target')) {
+        el.target.value = roundInputNumber(values.target, currentTarget);
+      }
+      if (Object.prototype.hasOwnProperty.call(values, 'guideFilters')) {
+        el.guideFilters.checked = Boolean(values.guideFilters);
+      }
+      if (Object.prototype.hasOwnProperty.call(values, 'strictBars')) {
+        el.strictBars.checked = Boolean(values.strictBars);
+      }
+      if (Object.prototype.hasOwnProperty.call(values, 'growthStairsEnabled')) {
+        el.growthStairs.checked = Boolean(values.growthStairsEnabled);
+      }
+      if (Object.prototype.hasOwnProperty.call(values, 'initialStake')) {
+        el.initialStake.value = optionalInputValue(values.initialStake);
+      }
+      if (Object.prototype.hasOwnProperty.call(values, 'blindSniperEnabled')) {
+        el.blindSniper.checked = Boolean(values.blindSniperEnabled);
+      }
+      if (Object.prototype.hasOwnProperty.call(values, 'blindSniperMarks')) {
+        el.blindSniperMarks.value = formatMilestoneList(values.blindSniperMarks);
+      }
+
+      if (sync) {
+        syncConfigPreviewFromControls();
+      }
+    }
+
+    function syncConfigPreviewFromControls() {
+      currentSeed = roundInputNumber(el.seed.value, currentSeed);
+      currentTarget = roundInputNumber(el.target.value, currentTarget);
+      currentGrowthStairsEnabled = Boolean(el.growthStairs.checked);
+      currentInitialStake = parseOptionalNumber(el.initialStake.value, null);
+      currentBlindSniperMilestones = normalizeMilestoneList(
+        el.blindSniperMarks.value || currentBlindSniperMilestones,
+        currentBlindSniperMilestones
+      );
+      currentBlindSniperStartRatio = currentBlindSniperMilestones[currentBlindSniperMilestones.length - 1] ?? currentBlindSniperStartRatio;
+      currentSavedDefaults = readSavedDefaults();
+      updateDefaultsState();
+      resetEquityTrail();
+      el.gateStepText.textContent = `Gate step ${money(Math.max(currentMinStake * 2, currentSeed * currentProfitGatePercent))}`;
+      el.growthFloorText.textContent = `Growth floor ${money(currentMinStake)}`;
+    }
+
+    function updateDefaultsState() {
+      const hasSaved = Boolean(currentSavedDefaults);
+      el.defaultsState.textContent = hasSaved ? 'Saved defaults active' : 'Actual defaults active';
+      el.resetDefaultsBtn.disabled = !hasSaved || !currentFactoryDefaults;
+      el.saveDefaultsBtn.disabled = false;
     }
 
     function statusLabel(value) {
@@ -2029,6 +2181,30 @@
       void refreshRuns();
     });
 
+    el.saveDefaultsBtn.addEventListener('click', () => {
+      const defaults = collectCurrentDefaults();
+      if (writeSavedDefaults(defaults)) {
+        currentSavedDefaults = defaults;
+        updateDefaultsState();
+        showBanner('success', 'Current configuration saved as defaults.');
+      } else {
+        showBanner('warn', 'Could not save defaults in this browser.');
+      }
+    });
+
+    el.resetDefaultsBtn.addEventListener('click', () => {
+      if (!currentFactoryDefaults) {
+        showBanner('warn', 'Actual defaults are not ready yet.');
+        return;
+      }
+      clearSavedDefaults();
+      currentSavedDefaults = null;
+      applyDefaultsToControls(currentFactoryDefaults, { sync: false });
+      syncConfigPreviewFromControls();
+      updateDefaultsState();
+      showBanner('success', 'Restored actual defaults.');
+    });
+
     socket.on('config', (config) => {
       if (config.defaultMode) el.mode.value = config.defaultMode;
       if (Number.isFinite(Number(config.windowSize))) {
@@ -2065,6 +2241,12 @@
       el.strictBars.checked = Boolean(config.strictBarFilters);
       el.blindSniper.checked = Boolean(config.blindSniperEnabled);
       el.blindSniperMarks.value = formatMilestoneList(currentBlindSniperMilestones);
+      currentFactoryDefaults = collectCurrentDefaults();
+      currentSavedDefaults = readSavedDefaults();
+      if (currentSavedDefaults) {
+        applyDefaultsToControls(currentSavedDefaults, { sync: false });
+      }
+      syncConfigPreviewFromControls();
       el.gateStepText.textContent = `Gate step ${money(Math.max(currentMinStake * 2, currentSeed * currentProfitGatePercent))}`;
       el.growthFloorText.textContent = `Growth floor ${money(currentMinStake)}`;
       if (config.hasEnvToken) {
