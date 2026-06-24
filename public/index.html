@@ -990,6 +990,7 @@
             <span id="gateFloorText">Protected floor $0.00</span>
             <span id="recoveryDebtText">Recovery debt $0.00</span>
             <span id="gateStepText">Gate step $0.00</span>
+            <span id="goalModeText">Goal mode standard</span>
             <span id="recoveryText">Recovery split off</span>
             <span id="stairsText">Growth stairs off</span>
             <span id="growthTierText">Growth tier 0</span>
@@ -1123,6 +1124,7 @@
       gateFloorText: document.getElementById('gateFloorText'),
       recoveryDebtText: document.getElementById('recoveryDebtText'),
       gateStepText: document.getElementById('gateStepText'),
+      goalModeText: document.getElementById('goalModeText'),
       recoveryText: document.getElementById('recoveryText'),
       stairsText: document.getElementById('stairsText'),
       growthTierText: document.getElementById('growthTierText'),
@@ -1427,11 +1429,11 @@
         const startedAt = formatTime(activeRun.startedAt || activeRun.snapshot?.startedAt || activeRun.updatedAt);
         const phase = phaseName(activeRun.phase || activeRun.snapshot?.phase || 'growth');
         el.sessionStateText.textContent = activeStatus === 'paused' ? 'Paused session' : 'Live session';
-        el.sessionStateMeta.textContent = `Run ${shortId(activeRun.id)} · ${statusLabel(activeStatus)} · ${phase} · started ${startedAt}`;
+        el.sessionStateMeta.textContent = `Run ${shortId(activeRun.id)} · ${statusLabel(activeStatus)} · ${phase} · ${goalModeLabel(activeRun)} · started ${startedAt}`;
       } else if (resumeRun) {
         const pausedAt = formatTime(resumeRun.pausedAt || resumeRun.updatedAt || resumeRun.startedAt);
         el.sessionStateText.textContent = 'Paused session';
-        el.sessionStateMeta.textContent = `Run ${shortId(resumeRun.id)} · resume available · paused ${pausedAt}`;
+        el.sessionStateMeta.textContent = `Run ${shortId(resumeRun.id)} · resume available · ${goalModeLabel(resumeRun)} · paused ${pausedAt}`;
       } else {
         el.sessionStateText.textContent = 'Idle';
         el.sessionStateMeta.textContent = 'No live run. Start a session to begin.';
@@ -1495,6 +1497,23 @@
       const trigger = Number(event.confidenceGateTriggerWinRate || 81);
       const release = Number(event.confidenceGateReleaseWinRate || 82);
       return `Confidence gate on: ${winRate.toFixed(1)}% win rate, below ${trigger.toFixed(1)}% trigger. Hold risky jumps and snipes until ${release.toFixed(1)}%+`;
+    }
+
+    function goalModeLabel(event) {
+      const seed = Number(event && event.seed);
+      const target = Number(event && event.target);
+      const inferredGapRatio = Number.isFinite(seed) && Number.isFinite(target) && seed > 0
+        ? Math.max(0, target - seed) / seed
+        : NaN;
+      const gapRatio = Number.isFinite(Number(event && event.goalGapRatio))
+        ? Number(event.goalGapRatio)
+        : inferredGapRatio;
+      const mode = String(event && event.goalMode ? event.goalMode : '').toLowerCase() || (Number.isFinite(gapRatio) && gapRatio <= 0.25 ? 'compact' : 'standard');
+      if (mode === 'compact') {
+        const gapText = Number.isFinite(gapRatio) ? ` (${(gapRatio * 100).toFixed(1)}% seed gap)` : '';
+        return `Goal mode compact${gapText}`;
+      }
+      return 'Goal mode standard';
     }
 
     function setControlState(status) {
@@ -2195,7 +2214,13 @@
         : Number(event.winRate || 0);
       const confidenceGateTriggerWinRate = Number(event.confidenceGateTriggerWinRate || 81);
       const confidenceGateReleaseWinRate = Number(event.confidenceGateReleaseWinRate || 82);
+      const goalModeText = goalModeLabel({
+        ...event,
+        seed,
+        target
+      });
       const sniperText = sniperStatusLabel(event);
+      el.goalModeText.textContent = goalModeText;
 
       currentGrowthStairsEnabled = growthStairsEnabled;
       currentInitialStake = initialStake;
@@ -2504,6 +2529,7 @@
       }
       el.sniperText.textContent = sniperStatusLabel(event);
       el.confidenceText.textContent = confidenceGateLabel(event);
+      el.goalModeText.textContent = goalModeLabel(event);
       if (currentSessionState.activeRun) {
         currentSessionState.activeRun = {
           ...currentSessionState.activeRun,

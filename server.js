@@ -94,6 +94,21 @@ function blindSniperLimit(milestones) {
   return Math.max(1, Array.isArray(milestones) ? milestones.length : 0);
 }
 
+function goalCalibrationFrom(seed, target) {
+  const resolvedSeed = roundMoney(numberFrom(seed, 10));
+  const resolvedTarget = roundMoney(numberFrom(target, resolvedSeed + 40));
+  const gap = Math.max(0, resolvedTarget - resolvedSeed);
+  const gapRatio = gap / Math.max(0.01, resolvedSeed);
+  const compact = gapRatio <= 0.25;
+
+  return {
+    compact,
+    label: compact ? 'compact' : 'standard',
+    gap,
+    gapRatio
+  };
+}
+
 function basicAuthValid(headers) {
   const password = process.env.DASHBOARD_PASSWORD;
   if (!password) return true;
@@ -230,6 +245,8 @@ function summarizeRun(run, reason = run?.reason || 'manual') {
 
   const snapshot = run.snapshot || {};
   const seed = roundMoney(numberFrom(run.seed ?? run.config?.seed ?? snapshot.seed ?? snapshot.balance ?? 10, 10));
+  const target = roundMoney(numberFrom(run.target ?? run.config?.target ?? seed, seed));
+  const calibration = goalCalibrationFrom(seed, target);
   const finalBalance = roundMoney(numberFrom(snapshot.balance ?? run.balance ?? seed, seed));
   const totalTrades = Number(snapshot.totalTrades ?? run.totalTrades ?? 0);
   const wins = Number(snapshot.wins ?? run.wins ?? 0);
@@ -261,6 +278,9 @@ function summarizeRun(run, reason = run?.reason || 'manual') {
     splitRecoveryCooldownTrades: Number(snapshot.splitRecoveryCooldownTrades ?? run.splitRecoveryCooldownTrades ?? 3),
     splitRecoveryPieces: Number(snapshot.splitRecoveryPieces ?? run.splitRecoveryPieces ?? 2),
     splitRecoveryCapPercent: Number(snapshot.splitRecoveryCapPercent ?? run.splitRecoveryCapPercent ?? 0.22),
+    goalMode: snapshot.goalMode ?? run.goalMode ?? calibration.label,
+    goalGap: Number(snapshot.goalGap ?? run.goalGap ?? calibration.gap),
+    goalGapRatio: Number(snapshot.goalGapRatio ?? run.goalGapRatio ?? calibration.gapRatio),
     totalTrades,
     wins,
     losses,
@@ -268,7 +288,7 @@ function summarizeRun(run, reason = run?.reason || 'manual') {
     startingBalance: seed,
     finalBalance,
     netProfit: roundMoney(finalBalance - seed),
-    target: Number(run.target ?? run.config?.target ?? seed),
+    target,
     blindSniperEnabled: Boolean(snapshot.blindSniperEnabled ?? run.blindSniperEnabled ?? run.config?.blindSniperEnabled ?? false),
     blindSniperUses: Number(snapshot.blindSniperUses ?? run.blindSniperUses ?? run.config?.blindSniperUses ?? 0),
     blindSniperMilestones: normalizeMilestoneList(
@@ -295,6 +315,9 @@ function summarizeRun(run, reason = run?.reason || 'manual') {
 
 function buildRunPatch(bot, runDoc, extra = {}) {
   const snapshot = bot ? bot.snapshot() : runDoc?.snapshot || null;
+  const seed = roundMoney(numberFrom(runDoc?.seed ?? runDoc?.config?.seed ?? snapshot?.balance ?? 10, 10));
+  const target = roundMoney(numberFrom(runDoc?.target ?? runDoc?.config?.target ?? seed, seed));
+  const calibration = goalCalibrationFrom(seed, target);
 
   return {
     snapshot,
@@ -312,6 +335,9 @@ function buildRunPatch(bot, runDoc, extra = {}) {
     growthStep: bot ? bot.growthMilestoneStep() : runDoc?.growthStep ?? 0,
     growthFloor: bot ? bot.growthStakeFloor() : runDoc?.growthFloor ?? 0,
     gateStep: bot ? bot.profitGateStep() : runDoc?.gateStep ?? 0,
+    goalMode: snapshot?.goalMode ?? runDoc?.goalMode ?? calibration.label,
+    goalGap: Number(snapshot?.goalGap ?? runDoc?.goalGap ?? calibration.gap),
+    goalGapRatio: Number(snapshot?.goalGapRatio ?? runDoc?.goalGapRatio ?? calibration.gapRatio),
     updatedAt: new Date(),
     ...extra
   };
@@ -356,6 +382,7 @@ function runBalanceState(run) {
   const snapshot = run.snapshot || {};
   const seed = roundMoney(numberFrom(run.seed ?? run.config?.seed ?? snapshot.balance ?? 10, 10));
   const target = roundMoney(numberFrom(run.target ?? run.config?.target ?? seed + 40, seed + 40));
+  const calibration = goalCalibrationFrom(seed, target);
   const balance = roundMoney(numberFrom(snapshot.balance ?? run.balance ?? seed, seed));
   const totalTrades = Number(snapshot.totalTrades ?? run.totalTrades ?? 0);
   const wins = Number(snapshot.wins ?? run.wins ?? 0);
@@ -441,6 +468,9 @@ function runBalanceState(run) {
     splitRecoveryCooldownTrades: Number(snapshot.splitRecoveryCooldownTrades ?? run.splitRecoveryCooldownTrades ?? 3),
     splitRecoveryPieces: Number(snapshot.splitRecoveryPieces ?? run.splitRecoveryPieces ?? 2),
     splitRecoveryCapPercent: Number(snapshot.splitRecoveryCapPercent ?? run.splitRecoveryCapPercent ?? 0.22),
+    goalMode: snapshot.goalMode ?? run.goalMode ?? calibration.label,
+    goalGap: Number(snapshot.goalGap ?? run.goalGap ?? calibration.gap),
+    goalGapRatio: Number(snapshot.goalGapRatio ?? run.goalGapRatio ?? calibration.gapRatio),
     confidenceGateLocked,
     confidenceGateWinRate,
     confidenceGateTriggerWinRate,
@@ -727,6 +757,9 @@ async function startFreshRun(payload = {}) {
     growthStep: bot.growthMilestoneStep(),
     growthFloor: bot.growthStakeFloor(),
     gateStep: bot.profitGateStep(),
+    goalMode: initialSnapshot.goalMode,
+    goalGap: initialSnapshot.goalGap,
+    goalGapRatio: initialSnapshot.goalGapRatio,
     startedAt: bot.startedAt ? bot.startedAt.toISOString() : new Date().toISOString()
   });
 
