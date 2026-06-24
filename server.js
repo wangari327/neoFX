@@ -343,6 +343,10 @@ function runBalanceState(run) {
   const wins = Number(snapshot.wins ?? run.wins ?? 0);
   const losses = Number(snapshot.losses ?? run.losses ?? 0);
   const phase = snapshot.phase || run.phase || 'growth';
+  const confidenceGateLocked = Boolean(snapshot.confidenceGateLocked ?? run.confidenceGateLocked ?? false);
+  const confidenceGateWinRate = Number(snapshot.confidenceGateWinRate ?? run.confidenceGateWinRate ?? (totalTrades ? (wins / totalTrades) * 100 : 0));
+  const confidenceGateTriggerWinRate = Number(snapshot.confidenceGateTriggerWinRate ?? run.confidenceGateTriggerWinRate ?? 81);
+  const confidenceGateReleaseWinRate = Number(snapshot.confidenceGateReleaseWinRate ?? run.confidenceGateReleaseWinRate ?? 82);
   const blindSniperEnabled = Boolean(snapshot.blindSniperEnabled ?? run.blindSniperEnabled ?? run.config?.blindSniperEnabled ?? false);
   const blindSniperUses = Number(snapshot.blindSniperUses ?? run.blindSniperUses ?? run.config?.blindSniperUses ?? 0);
   const blindSniperCadenceTrades = Number(snapshot.blindSniperCadenceTrades ?? run.blindSniperCadenceTrades ?? run.config?.blindSniperCadenceTrades ?? 3);
@@ -409,6 +413,10 @@ function runBalanceState(run) {
     splitRecoveryCooldownTrades: Number(snapshot.splitRecoveryCooldownTrades ?? run.splitRecoveryCooldownTrades ?? 3),
     splitRecoveryPieces: Number(snapshot.splitRecoveryPieces ?? run.splitRecoveryPieces ?? 2),
     splitRecoveryCapPercent: Number(snapshot.splitRecoveryCapPercent ?? run.splitRecoveryCapPercent ?? 0.22),
+    confidenceGateLocked,
+    confidenceGateWinRate,
+    confidenceGateTriggerWinRate,
+    confidenceGateReleaseWinRate,
     blindSniperEnabled,
     blindSniperUses,
     blindSniperUsesRemaining,

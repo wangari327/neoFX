@@ -32,6 +32,8 @@ const PHASES = {
 };
 
 const DEFAULT_API_BASE_URL = 'https://api.derivws.com';
+const CONFIDENCE_GUARD_TRIGGER_WIN_RATE = 81;
+const CONFIDENCE_GUARD_RELEASE_WIN_RATE = 82;
 
 function toNumber(value, fallback) {
   const number = Number(value);
@@ -215,6 +217,7 @@ class DerivDigitBot extends EventEmitter {
     this.splitRecoveryArmed = false;
     this.splitRecoveryReadyAtTrade = 0;
     this.splitRecoveryPiecesRemaining = 0;
+    this.confidenceGateLocked = false;
     this.paused = false;
     this.pauseRequested = false;
     this.pauseReason = 'manual';
@@ -594,6 +597,27 @@ class DerivDigitBot extends EventEmitter {
     return clamp((this.effectiveGrowthBalance() - this.options.seed) / span, 0, 1);
   }
 
+  confidenceGateState() {
+    const progress = this.progressRatio();
+    const winRate = this.winRate();
+
+    if (this.confidenceGateLocked) {
+      if (progress <= 0 || winRate >= CONFIDENCE_GUARD_RELEASE_WIN_RATE) {
+        this.confidenceGateLocked = false;
+      }
+    } else if (progress > 0 && winRate < CONFIDENCE_GUARD_TRIGGER_WIN_RATE) {
+      this.confidenceGateLocked = true;
+    }
+
+    return {
+      locked: this.confidenceGateLocked,
+      progress,
+      winRate,
+      triggerWinRate: CONFIDENCE_GUARD_TRIGGER_WIN_RATE,
+      releaseWinRate: CONFIDENCE_GUARD_RELEASE_WIN_RATE
+    };
+  }
+
   sessionProgressRatio() {
     const span = Math.max(0.01, this.options.target - this.options.seed);
     return clamp((this.effectiveGrowthBalance() - this.options.seed) / span, -1, 1);
@@ -622,7 +646,7 @@ class DerivDigitBot extends EventEmitter {
     return Math.max(0, roundMoney(this.riskFloor - this.effectiveGrowthBalance()));
   }
 
-  blindSniperState() {
+  blindSniperState(confidenceGate = this.confidenceGateState()) {
     const enabled = this.options.blindSniperEnabled;
     const progress = this.sessionProgressRatio();
     const milestones = Array.isArray(this.options.blindSniperMilestones) && this.options.blindSniperMilestones.length
@@ -633,7 +657,8 @@ class DerivDigitBot extends EventEmitter {
     const milestoneIndex = Math.min(this.blindSniperUses, milestones.length);
     const usesRemaining = Math.max(0, maxUses - this.blindSniperUses);
     const tradesUntilShot = Math.max(0, this.options.blindSniperCadenceTrades - this.tradesSinceBlindSniper);
-    const phaseReady = ![PHASES.MARTINGALE, PHASES.REBUILD, PHASES.STOPPED].includes(this.phase) && !this.splitRecoveryArmed;
+    const confidenceBlocked = Boolean(confidenceGate.locked && confidenceGate.progress > 0);
+    const phaseReady = ![PHASES.MARTINGALE, PHASES.REBUILD, PHASES.STOPPED].includes(this.phase) && !this.splitRecoveryArmed && !confidenceBlocked;
     const nextMilestone = milestoneIndex < milestones.length ? milestones[milestoneIndex] : null;
     const armed =
       enabled &&
@@ -649,7 +674,11 @@ class DerivDigitBot extends EventEmitter {
     } else if (usesRemaining <= 0) {
       reason = 'quota_exhausted';
     } else if (!phaseReady) {
-      reason = this.splitRecoveryArmed ? 'recovery_blocked' : 'phase_blocked';
+      reason = confidenceBlocked
+        ? 'confidence_blocked'
+        : this.splitRecoveryArmed
+          ? 'recovery_blocked'
+          : 'phase_blocked';
     } else if (nextMilestone !== null && progress < nextMilestone) {
       reason = 'progress_wait';
     } else if (this.tradesSinceBlindSniper < this.options.blindSniperCadenceTrades) {
@@ -674,7 +703,11 @@ class DerivDigitBot extends EventEmitter {
       tradesUntilShot,
       maxUses,
       startRatio: this.options.blindSniperStartRatio,
-      stakeFraction: this.options.blindSniperStakeFraction
+      stakeFraction: this.options.blindSniperStakeFraction,
+      confidenceGateLocked: confidenceBlocked,
+      confidenceGateWinRate: confidenceGate.winRate,
+      confidenceGateTriggerWinRate: confidenceGate.triggerWinRate,
+      confidenceGateReleaseWinRate: confidenceGate.releaseWinRate
     };
   }
 
@@ -992,7 +1025,20 @@ class DerivDigitBot extends EventEmitter {
       };
     }
 
-    const sniperState = this.blindSniperState();
+    const confidenceGate = this.confidenceGateState();
+    const sniperState = this.blindSniperState(confidenceGate);
+
+    if (confidenceGate.locked && confidenceGate.progress > 0) {
+      if (this.phase === PHASES.RISKY) {
+        this.changePhase(PHASES.GROWTH, 'confidence_gate_active');
+      }
+      this.emitAnalysis(
+        'confidence_gate',
+        `Win rate ${confidenceGate.winRate.toFixed(1)}% is below ${confidenceGate.triggerWinRate}% while profit progress is positive. Risky jumps and sniper shots stay paused until it reaches ${confidenceGate.releaseWinRate}%+.`,
+        { plan: { kind: 'confidence_gate' } }
+      );
+    }
+
     if (sniperState.armed) {
       return {
         kind: PHASES.BLIND_SNIPER,
@@ -1005,6 +1051,8 @@ class DerivDigitBot extends EventEmitter {
       const sniperProgress = Math.round((sniperState.nextMilestone ?? sniperState.startRatio ?? 0.75) * 100);
       const reasonText = sniperState.reason === 'quota_exhausted'
         ? 'Blind sniper quota has been used up.'
+        : sniperState.reason === 'confidence_blocked'
+          ? `Blind sniper waits for win rate recovery. It will stay paused until the run reaches ${sniperState.confidenceGateReleaseWinRate}%+.`
         : sniperState.reason === 'phase_blocked'
           ? 'Blind sniper waits for an offensive phase.'
           : sniperState.reason === 'recovery_blocked'
@@ -1046,6 +1094,7 @@ class DerivDigitBot extends EventEmitter {
     if (
       this.phase === PHASES.GROWTH &&
       !this.splitRecoveryArmed &&
+      (!confidenceGate.locked || confidenceGate.progress <= 0) &&
       this.effectiveGrowthBalance() >= this.riskFloor + this.profitGateStep()
     ) {
       this.changePhase(PHASES.RISKY, 'realized_profit_gate_hit');
@@ -1059,6 +1108,14 @@ class DerivDigitBot extends EventEmitter {
     }
 
     if (this.phase === PHASES.RISKY) {
+      if (confidenceGate.locked && confidenceGate.progress > 0) {
+        this.changePhase(PHASES.GROWTH, 'confidence_gate_active');
+        return {
+          kind: PHASES.GROWTH,
+          stake: this.growthStake(),
+          confidenceGateLocked: true
+        };
+      }
       const progress = this.progressRatio();
       const riskyStakePercent = this.riskyStakePercent(progress);
       if (progress >= 0.6) {
@@ -1192,7 +1249,8 @@ class DerivDigitBot extends EventEmitter {
     }
 
     this.balance = roundMoney(this.balance + result.profit);
-    const sniperState = this.blindSniperState();
+    const confidenceGate = this.confidenceGateState();
+    const sniperState = this.blindSniperState(confidenceGate);
 
     const tradeEvent = {
       time: result.timestamp,
@@ -1238,6 +1296,10 @@ class DerivDigitBot extends EventEmitter {
       splitRecoveryPieces: this.options.splitRecoveryPieces,
       splitRecoveryCapPercent: this.options.splitRecoveryCapPercent,
       progressRatio: this.progressRatio(),
+      confidenceGateLocked: confidenceGate.locked,
+      confidenceGateWinRate: confidenceGate.winRate,
+      confidenceGateTriggerWinRate: confidenceGate.triggerWinRate,
+      confidenceGateReleaseWinRate: confidenceGate.releaseWinRate,
       riskyStakePercent: plan.kind === PHASES.RISKY
         ? (plan.riskyStakePercent ?? this.riskyStakePercent())
         : null
@@ -1250,6 +1312,7 @@ class DerivDigitBot extends EventEmitter {
       `phase=${tradeEvent.phase} plan=${tradeEvent.plan} tier=${tradeEvent.growthTier} ` +
       `session_balance=${tradeEvent.effectiveGrowthBalance.toFixed(2)} overlay=${tradeEvent.sniperOverlayNet.toFixed(2)} ` +
       `growth_floor=${tradeEvent.growthFloor.toFixed(2)} floor=${this.riskFloor.toFixed(2)} debt=${this.currentRecoveryDebt().toFixed(2)} ` +
+      `confidence_gate=${tradeEvent.confidenceGateLocked ? 'on' : 'off'} ` +
       `risky_pct=${tradeEvent.riskyStakePercent ? (tradeEvent.riskyStakePercent * 100).toFixed(1) : 'n/a'} ` +
       `martingale_streak=${this.martingaleLossStreak} ` +
       `split_recovery=${this.splitRecoveryArmed ? 'on' : 'off'} ` +
@@ -1485,7 +1548,8 @@ class DerivDigitBot extends EventEmitter {
   }
 
   emitStatus(status) {
-    const sniperState = this.blindSniperState();
+    const confidenceGate = this.confidenceGateState();
+    const sniperState = this.blindSniperState(confidenceGate);
     this.emit('status', {
       status,
       paused: this.paused,
@@ -1530,7 +1594,11 @@ class DerivDigitBot extends EventEmitter {
       splitRecoveryPiecesRemaining: this.splitRecoveryPiecesRemaining,
       splitRecoveryCooldownTrades: this.options.splitRecoveryCooldownTrades,
       splitRecoveryPieces: this.options.splitRecoveryPieces,
-      splitRecoveryCapPercent: this.options.splitRecoveryCapPercent
+      splitRecoveryCapPercent: this.options.splitRecoveryCapPercent,
+      confidenceGateLocked: confidenceGate.locked,
+      confidenceGateWinRate: confidenceGate.winRate,
+      confidenceGateTriggerWinRate: confidenceGate.triggerWinRate,
+      confidenceGateReleaseWinRate: confidenceGate.releaseWinRate
     });
   }
 
@@ -1570,6 +1638,7 @@ class DerivDigitBot extends EventEmitter {
       splitRecoveryCooldownTrades: this.options.splitRecoveryCooldownTrades,
       splitRecoveryPieces: this.options.splitRecoveryPieces,
       splitRecoveryCapPercent: this.options.splitRecoveryCapPercent,
+      confidenceGateLocked: this.confidenceGateLocked,
       totalTrades: this.totalTrades,
       wins: this.wins,
       losses: this.losses,
@@ -1614,6 +1683,7 @@ class DerivDigitBot extends EventEmitter {
     this.splitRecoveryArmed = Boolean(snapshot.splitRecoveryArmed ?? this.splitRecoveryArmed);
     this.splitRecoveryReadyAtTrade = Math.max(0, Math.floor(toNumber(snapshot.splitRecoveryReadyAtTrade, this.splitRecoveryReadyAtTrade)));
     this.splitRecoveryPiecesRemaining = Math.max(0, Math.floor(toNumber(snapshot.splitRecoveryPiecesRemaining, this.splitRecoveryPiecesRemaining)));
+    this.confidenceGateLocked = Boolean(snapshot.confidenceGateLocked ?? this.confidenceGateLocked);
     this.options.blindSniperMilestones = normalizeMilestoneList(
       snapshot.blindSniperMilestones,
       this.options.blindSniperMilestones
@@ -1668,6 +1738,7 @@ class DerivDigitBot extends EventEmitter {
   }
 
   summary(reason) {
+    const confidenceGate = this.confidenceGateState();
     return {
       reason,
       startedAt: this.startedAt && this.startedAt.toISOString(),
@@ -1695,6 +1766,10 @@ class DerivDigitBot extends EventEmitter {
       splitRecoveryCooldownTrades: this.options.splitRecoveryCooldownTrades,
       splitRecoveryPieces: this.options.splitRecoveryPieces,
       splitRecoveryCapPercent: this.options.splitRecoveryCapPercent,
+      confidenceGateLocked: confidenceGate.locked,
+      confidenceGateWinRate: confidenceGate.winRate,
+      confidenceGateTriggerWinRate: confidenceGate.triggerWinRate,
+      confidenceGateReleaseWinRate: confidenceGate.releaseWinRate,
       blindSniperEnabled: this.options.blindSniperEnabled,
       blindSniperUses: this.blindSniperUses,
       blindSniperUsesRemaining: Math.max(0, this.options.blindSniperMaxUses - this.blindSniperUses),

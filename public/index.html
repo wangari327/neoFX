@@ -995,6 +995,7 @@
             <span id="growthTierText">Growth tier 0</span>
             <span id="growthFloorText">Growth floor $0.00</span>
             <span id="sniperText">Blind sniper off</span>
+            <span id="confidenceText">Confidence gate off</span>
           </div>
 
           <div class="sparkline-wrap">
@@ -1127,6 +1128,7 @@
       growthTierText: document.getElementById('growthTierText'),
       growthFloorText: document.getElementById('growthFloorText'),
       sniperText: document.getElementById('sniperText'),
+      confidenceText: document.getElementById('confidenceText'),
       progressBar: document.getElementById('progressBar'),
       progressMarker: document.getElementById('progressMarker'),
       equityValue: document.getElementById('equityValue'),
@@ -1474,6 +1476,7 @@
       if (reason === 'progress_wait') return progressPct < 0
         ? `Blind sniper waiting recovery at ${nextPct}%+`
         : `Blind sniper waiting for ${nextPct}%+`;
+      if (reason === 'confidence_blocked') return `Blind sniper waiting on win rate recovery (${Number(event.confidenceGateWinRate || 0).toFixed(1)}% -> ${Number(event.confidenceGateReleaseWinRate || 82).toFixed(1)}%+)`;
       if (reason === 'cadence_wait') return `Blind sniper cooldown, ${tradesUntilShot} trade(s) until the next shot`;
       if (reason === 'recovery_blocked') return 'Blind sniper waiting for split recovery to clear';
       if (reason === 'phase_blocked') return 'Blind sniper waiting for an offensive phase';
@@ -1481,6 +1484,14 @@
       return progressPct < 0
         ? `Blind sniper recovery ${progressPct}%`
         : `Blind sniper ${progressPct}% to target`;
+    }
+
+    function confidenceGateLabel(event) {
+      if (!event || !event.confidenceGateLocked) return 'Confidence gate off';
+      const winRate = Number(event.confidenceGateWinRate || 0);
+      const trigger = Number(event.confidenceGateTriggerWinRate || 81);
+      const release = Number(event.confidenceGateReleaseWinRate || 82);
+      return `Confidence gate on: ${winRate.toFixed(1)}% win rate, below ${trigger.toFixed(1)}% trigger. Hold risky jumps and snipes until ${release.toFixed(1)}%+`;
     }
 
     function setControlState(status) {
@@ -1525,6 +1536,8 @@
         color = 'var(--green)';
       } else if (stage === 'trade_failed' || stage === 'trade_cooldown') {
         color = 'var(--red)';
+      } else if (stage === 'confidence_gate') {
+        color = 'var(--yellow)';
       } else if (stage === 'trade_in_flight') {
         color = 'var(--cyan)';
       } else if (stage === 'blind_sniper_waiting') {
@@ -1771,6 +1784,16 @@
       );
       const blindSniperUsesRemaining = Math.max(0, blindSniperMaxUses - blindSniperUses);
       const blindSniperTradesUntilShot = Math.max(0, blindSniperCadenceTrades - blindSniperTradesSinceLastShot);
+      const confidenceGateLocked = Boolean(snapshot.confidenceGateLocked ?? run.confidenceGateLocked ?? false);
+      const confidenceGateWinRate = Number.isFinite(Number(snapshot.confidenceGateWinRate ?? run.confidenceGateWinRate))
+        ? Number(snapshot.confidenceGateWinRate ?? run.confidenceGateWinRate)
+        : Number.isFinite(Number(run.winRate))
+          ? Number(run.winRate)
+          : totalTrades
+            ? (wins / totalTrades) * 100
+            : 0;
+      const confidenceGateTriggerWinRate = Number(snapshot.confidenceGateTriggerWinRate ?? run.confidenceGateTriggerWinRate ?? 81);
+      const confidenceGateReleaseWinRate = Number(snapshot.confidenceGateReleaseWinRate ?? run.confidenceGateReleaseWinRate ?? 82);
       const blindSniperArmed =
         blindSniperEnabled &&
         !['martingale', 'rebuild', 'stopped'].includes(phase) &&
@@ -1779,11 +1802,13 @@
         blindSniperTradesSinceLastShot >= blindSniperCadenceTrades;
       const blindSniperReason = !blindSniperEnabled
         ? 'disabled'
+        : confidenceGateLocked && blindSniperProgress > 0
+          ? 'confidence_blocked'
         : blindSniperUsesRemaining <= 0
           ? 'quota_exhausted'
-          : ['martingale', 'rebuild', 'stopped'].includes(phase)
-            ? 'phase_blocked'
-            : blindSniperProgress < blindSniperNextMilestone
+        : ['martingale', 'rebuild', 'stopped'].includes(phase)
+          ? 'phase_blocked'
+          : blindSniperProgress < blindSniperNextMilestone
               ? 'progress_wait'
               : blindSniperTradesSinceLastShot < blindSniperCadenceTrades
                 ? 'cadence_wait'
@@ -1836,6 +1861,10 @@
         splitRecoveryReadyAtTrade: Number(snapshot.splitRecoveryReadyAtTrade ?? run.splitRecoveryReadyAtTrade ?? 0),
         splitRecoveryPiecesRemaining: Number(snapshot.splitRecoveryPiecesRemaining ?? run.splitRecoveryPiecesRemaining ?? 0),
         splitRecoveryPieces: Number(snapshot.splitRecoveryPieces ?? run.splitRecoveryPieces ?? 2),
+        confidenceGateLocked,
+        confidenceGateWinRate,
+        confidenceGateTriggerWinRate,
+        confidenceGateReleaseWinRate,
         blindSniperEnabled,
         blindSniperUses,
         blindSniperUsesRemaining,
@@ -1849,7 +1878,11 @@
         blindSniperProgress,
         blindSniperArmed,
         blindSniperNextMilestone,
-        blindSniperReason
+        blindSniperReason,
+        confidenceGateLocked,
+        confidenceGateWinRate,
+        confidenceGateTriggerWinRate,
+        confidenceGateReleaseWinRate
       }, null, 'balance');
       currentActiveRunId = run.id || null;
       currentResumeRunId = run.status === 'paused' ? run.id || null : null;
@@ -2132,6 +2165,12 @@
       const splitRecoveryWait = splitRecoveryArmed
         ? Math.max(0, splitRecoveryReadyAtTrade - Number(event.totalTrades || lastRenderedTrades || 0))
         : 0;
+      const confidenceGateLocked = Boolean(event.confidenceGateLocked);
+      const confidenceGateWinRate = Number.isFinite(Number(event.confidenceGateWinRate))
+        ? Number(event.confidenceGateWinRate)
+        : Number(event.winRate || 0);
+      const confidenceGateTriggerWinRate = Number(event.confidenceGateTriggerWinRate || 81);
+      const confidenceGateReleaseWinRate = Number(event.confidenceGateReleaseWinRate || 82);
       const sniperText = sniperStatusLabel(event);
 
       currentGrowthStairsEnabled = growthStairsEnabled;
@@ -2206,6 +2245,12 @@
       }
 
       el.sniperText.textContent = sniperText;
+      el.confidenceText.textContent = confidenceGateLabel({
+        confidenceGateLocked,
+        confidenceGateWinRate,
+        confidenceGateTriggerWinRate,
+        confidenceGateReleaseWinRate
+      });
 
       if (source === 'trade') {
         el.lastTradeText.textContent = `${event.result} on ${event.condition} ${signedMoney(event.profit)}`;
@@ -2433,6 +2478,8 @@
       if (event.status) {
         setControlState(event.status);
       }
+      el.sniperText.textContent = sniperStatusLabel(event);
+      el.confidenceText.textContent = confidenceGateLabel(event);
       if (currentSessionState.activeRun) {
         currentSessionState.activeRun = {
           ...currentSessionState.activeRun,
