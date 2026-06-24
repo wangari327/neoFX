@@ -559,9 +559,18 @@ class DerivDigitBot extends EventEmitter {
   }
 
   growthStakeFloor() {
-    if (!this.options.growthStairsEnabled) return this.options.minStake;
-    const tier = this.growthTier();
-    return roundMoney(this.options.minStake * (1 + tier * this.options.growthStakeBumpPercent));
+    const floors = [this.options.minStake];
+
+    if (Number.isFinite(this.options.initialStake) && this.options.initialStake !== null) {
+      floors.push(this.options.initialStake);
+    }
+
+    if (this.options.growthStairsEnabled) {
+      const tier = this.growthTier();
+      floors.push(roundMoney(this.options.minStake * (1 + tier * this.options.growthStakeBumpPercent)));
+    }
+
+    return roundMoney(Math.max(...floors));
   }
 
   growthStake() {
