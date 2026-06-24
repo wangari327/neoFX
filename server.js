@@ -382,6 +382,16 @@ function runBalanceState(run) {
           : blindSniperTradesSinceLastShot < blindSniperCadenceTrades
             ? 'cadence_wait'
             : 'armed';
+  const blindSniperStakeValue = Number(snapshot.blindSniperStake ?? run.blindSniperStake);
+  const blindSniperStakeRawValue = Number(snapshot.blindSniperStakeRaw ?? run.blindSniperStakeRaw);
+  const blindSniperStake = Number.isFinite(blindSniperStakeValue) ? blindSniperStakeValue : null;
+  const blindSniperStakeRaw = Number.isFinite(blindSniperStakeRawValue) ? blindSniperStakeRawValue : null;
+  const blindSniperStakeCapped = Boolean(snapshot.blindSniperStakeCapped ?? run.blindSniperStakeCapped ?? false);
+  const blindSniperRemainingGapValue = Number(snapshot.blindSniperRemainingGap ?? run.blindSniperRemainingGap);
+  const blindSniperProfitAboveFloorValue = Number(snapshot.blindSniperProfitAboveFloor ?? run.blindSniperProfitAboveFloor);
+  const blindSniperGapCapValue = Number(snapshot.blindSniperGapCap ?? run.blindSniperGapCap);
+  const blindSniperProfitCapValue = Number(snapshot.blindSniperProfitCap ?? run.blindSniperProfitCap);
+  const blindSniperProgressTaperValue = Number(snapshot.blindSniperProgressTaper ?? run.blindSniperProgressTaper);
 
   return {
     runId: run.id,
@@ -431,6 +441,14 @@ function runBalanceState(run) {
     blindSniperArmed,
     blindSniperNextMilestone,
     blindSniperReason,
+    blindSniperStake,
+    blindSniperStakeRaw,
+    blindSniperStakeCapped,
+    blindSniperRemainingGap: Number.isFinite(blindSniperRemainingGapValue) ? blindSniperRemainingGapValue : null,
+    blindSniperProfitAboveFloor: Number.isFinite(blindSniperProfitAboveFloorValue) ? blindSniperProfitAboveFloorValue : null,
+    blindSniperGapCap: Number.isFinite(blindSniperGapCapValue) ? blindSniperGapCapValue : null,
+    blindSniperProfitCap: Number.isFinite(blindSniperProfitCapValue) ? blindSniperProfitCapValue : null,
+    blindSniperProgressTaper: Number.isFinite(blindSniperProgressTaperValue) ? blindSniperProgressTaperValue : null,
     blindSniperMaxUses: Math.max(1, blindSniperMilestones.length)
   };
 }

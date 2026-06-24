@@ -1463,6 +1463,9 @@
       const tradesUntilShot = Number(event.blindSniperTradesUntilShot ?? 0);
       const progressPct = Math.round(Number(event.blindSniperProgress ?? 0) * 100);
       const reason = String(event.blindSniperReason || '');
+      const stake = Number(event.blindSniperStake || 0);
+      const stakeText = Number.isFinite(stake) && stake > 0 ? ` at ${money(stake)}` : '';
+      const capText = event.blindSniperStakeCapped ? ' (capped near target)' : '';
       const nextPct = Math.round(Number(
         event.blindSniperNextMilestone ??
         event.blindSniperStartRatio ??
@@ -1472,10 +1475,10 @@
       ) * 100);
 
       if (usesRemaining <= 0) return 'Blind sniper quota used';
-      if (event.blindSniperArmed) return `Blind sniper armed (${usesRemaining}/${maxUses} uses left)`;
+      if (event.blindSniperArmed) return `Blind sniper armed${stakeText}${capText} (${usesRemaining}/${maxUses} uses left)`;
       if (reason === 'progress_wait') return progressPct < 0
-        ? `Blind sniper waiting recovery at ${nextPct}%+`
-        : `Blind sniper waiting for ${nextPct}%+`;
+        ? `Blind sniper waiting recovery at ${nextPct}%+${capText}`
+        : `Blind sniper waiting for ${nextPct}%+${capText}`;
       if (reason === 'confidence_blocked') return `Blind sniper waiting on win rate recovery (${Number(event.confidenceGateWinRate || 0).toFixed(1)}% -> ${Number(event.confidenceGateReleaseWinRate || 82).toFixed(1)}%+)`;
       if (reason === 'cadence_wait') return `Blind sniper cooldown, ${tradesUntilShot} trade(s) until the next shot`;
       if (reason === 'recovery_blocked') return 'Blind sniper waiting for split recovery to clear';
@@ -1774,6 +1777,14 @@
       const blindSniperStartRatio = Number(snapshot.blindSniperStartRatio ?? run.blindSniperStartRatio ?? config.blindSniperStartRatio ?? blindSniperMilestones[blindSniperMilestones.length - 1] ?? 0.75);
       const blindSniperStakeFraction = Number(snapshot.blindSniperStakeFraction ?? run.blindSniperStakeFraction ?? config.blindSniperStakeFraction ?? 1 / 3);
       const blindSniperTradesSinceLastShot = Number(snapshot.blindSniperTradesSinceLastShot ?? run.blindSniperTradesSinceLastShot ?? config.blindSniperTradesSinceLastShot ?? 0);
+      const blindSniperStake = Number(snapshot.blindSniperStake ?? run.blindSniperStake ?? config.blindSniperStake ?? NaN);
+      const blindSniperStakeRaw = Number(snapshot.blindSniperStakeRaw ?? run.blindSniperStakeRaw ?? config.blindSniperStakeRaw ?? NaN);
+      const blindSniperStakeCapped = Boolean(snapshot.blindSniperStakeCapped ?? run.blindSniperStakeCapped ?? config.blindSniperStakeCapped ?? false);
+      const blindSniperRemainingGap = Number(snapshot.blindSniperRemainingGap ?? run.blindSniperRemainingGap ?? config.blindSniperRemainingGap ?? NaN);
+      const blindSniperProfitAboveFloor = Number(snapshot.blindSniperProfitAboveFloor ?? run.blindSniperProfitAboveFloor ?? config.blindSniperProfitAboveFloor ?? NaN);
+      const blindSniperGapCap = Number(snapshot.blindSniperGapCap ?? run.blindSniperGapCap ?? config.blindSniperGapCap ?? NaN);
+      const blindSniperProfitCap = Number(snapshot.blindSniperProfitCap ?? run.blindSniperProfitCap ?? config.blindSniperProfitCap ?? NaN);
+      const blindSniperProgressTaper = Number(snapshot.blindSniperProgressTaper ?? run.blindSniperProgressTaper ?? config.blindSniperProgressTaper ?? NaN);
       const blindSniperProgress = Math.max(-1, Math.min(1, (effectiveGrowthBalance - seed) / Math.max(0.01, target - seed)));
       const blindSniperMilestoneIndex = Math.min(blindSniperUses, Math.max(0, blindSniperMilestones.length - 1));
       const blindSniperNextMilestone = Number(
@@ -1813,6 +1824,11 @@
               : blindSniperTradesSinceLastShot < blindSniperCadenceTrades
                 ? 'cadence_wait'
                 : 'armed';
+      const safeBlindSniperStake = Number.isFinite(blindSniperStake)
+        ? blindSniperStake
+        : Number.isFinite(blindSniperStakeRaw)
+          ? blindSniperStakeRaw
+          : null;
 
       currentBlindSniperCadenceTrades = blindSniperCadenceTrades;
       currentBlindSniperMaxUses = blindSniperMaxUses;
@@ -1879,6 +1895,14 @@
         blindSniperArmed,
         blindSniperNextMilestone,
         blindSniperReason,
+        blindSniperStake: safeBlindSniperStake,
+        blindSniperStakeRaw,
+        blindSniperStakeCapped,
+        blindSniperRemainingGap,
+        blindSniperProfitAboveFloor,
+        blindSniperGapCap,
+        blindSniperProfitCap,
+        blindSniperProgressTaper,
         confidenceGateLocked,
         confidenceGateWinRate,
         confidenceGateTriggerWinRate,

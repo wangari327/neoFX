@@ -34,6 +34,8 @@ const PHASES = {
 const DEFAULT_API_BASE_URL = 'https://api.derivws.com';
 const CONFIDENCE_GUARD_TRIGGER_WIN_RATE = 81;
 const CONFIDENCE_GUARD_RELEASE_WIN_RATE = 82;
+const BLIND_SNIPER_PROFIT_CAP_FRACTION = 0.25;
+const BLIND_SNIPER_PROGRESS_TAPER_FLOOR = 0.2;
 
 function toNumber(value, fallback) {
   const number = Number(value);
@@ -646,9 +648,35 @@ class DerivDigitBot extends EventEmitter {
     return Math.max(0, roundMoney(this.riskFloor - this.effectiveGrowthBalance()));
   }
 
+  blindSniperSizing() {
+    const balance = this.effectiveGrowthBalance();
+    const progress = clamp(this.sessionProgressRatio(), 0, 1);
+    const remainingGap = Math.max(0, this.options.target - balance);
+    const profitAboveFloor = Math.max(0, balance - this.riskFloor);
+    const legacyStake = Math.max(this.options.minStake, this.balance * this.options.blindSniperStakeFraction);
+    const progressTaper = clamp(1 - progress, BLIND_SNIPER_PROGRESS_TAPER_FLOOR, 1);
+    const taperedStake = legacyStake * progressTaper;
+    const gapCap = Math.max(this.options.minStake, remainingGap * this.options.blindSniperStakeFraction);
+    const profitCap = Math.max(this.options.minStake, profitAboveFloor * BLIND_SNIPER_PROFIT_CAP_FRACTION);
+    const rawStake = Math.max(this.options.minStake, Math.min(taperedStake, gapCap, profitCap));
+
+    return {
+      stake: roundMoney(rawStake),
+      rawStake: roundMoney(legacyStake),
+      taperedStake: roundMoney(taperedStake),
+      gapCap: roundMoney(gapCap),
+      profitCap: roundMoney(profitCap),
+      remainingGap: roundMoney(remainingGap),
+      profitAboveFloor: roundMoney(profitAboveFloor),
+      progressTaper: roundMoney(progressTaper),
+      capped: rawStake < legacyStake - 1e-9
+    };
+  }
+
   blindSniperState(confidenceGate = this.confidenceGateState()) {
     const enabled = this.options.blindSniperEnabled;
     const progress = this.sessionProgressRatio();
+    const sizing = this.blindSniperSizing();
     const milestones = Array.isArray(this.options.blindSniperMilestones) && this.options.blindSniperMilestones.length
       ? this.options.blindSniperMilestones
       : [this.options.blindSniperStartRatio];
@@ -698,6 +726,15 @@ class DerivDigitBot extends EventEmitter {
       milestoneIndex,
       progressStage,
       nextMilestone,
+      stake: sizing.stake,
+      rawStake: sizing.rawStake,
+      taperedStake: sizing.taperedStake,
+      gapCap: sizing.gapCap,
+      profitCap: sizing.profitCap,
+      remainingGap: sizing.remainingGap,
+      profitAboveFloor: sizing.profitAboveFloor,
+      progressTaper: sizing.progressTaper,
+      stakeCapped: sizing.capped,
       cadenceTrades: this.options.blindSniperCadenceTrades,
       tradesSinceLastShot: this.tradesSinceBlindSniper,
       tradesUntilShot,
@@ -711,11 +748,8 @@ class DerivDigitBot extends EventEmitter {
     };
   }
 
-  blindSniperStake() {
-    return this.normalizeStake(
-      this.balance * this.options.blindSniperStakeFraction,
-      this.options.blindSniperStakeFraction
-    );
+  blindSniperStake(confidenceGate = this.confidenceGateState()) {
+    return this.blindSniperState(confidenceGate).stake;
   }
 
   profitGateStep() {
@@ -1042,7 +1076,7 @@ class DerivDigitBot extends EventEmitter {
     if (sniperState.armed) {
       return {
         kind: PHASES.BLIND_SNIPER,
-        stake: this.blindSniperStake(),
+        stake: sniperState.stake,
         sniper: sniperState
       };
     }
@@ -1285,6 +1319,14 @@ class DerivDigitBot extends EventEmitter {
       blindSniperArmed: sniperState.armed,
       blindSniperMilestones: sniperState.milestones,
       blindSniperNextMilestone: sniperState.nextMilestone,
+      blindSniperStake: sniperState.stake,
+      blindSniperStakeRaw: sniperState.rawStake,
+      blindSniperStakeCapped: sniperState.stakeCapped,
+      blindSniperRemainingGap: sniperState.remainingGap,
+      blindSniperProfitAboveFloor: sniperState.profitAboveFloor,
+      blindSniperGapCap: sniperState.gapCap,
+      blindSniperProfitCap: sniperState.profitCap,
+      blindSniperProgressTaper: sniperState.progressTaper,
       blindSniperEnabled: this.options.blindSniperEnabled,
       blindSniperReason: sniperState.reason,
       martingaleLossStreak: this.martingaleLossStreak,
@@ -1317,6 +1359,8 @@ class DerivDigitBot extends EventEmitter {
       `martingale_streak=${this.martingaleLossStreak} ` +
       `split_recovery=${this.splitRecoveryArmed ? 'on' : 'off'} ` +
       `split_wait=${Math.max(0, this.splitRecoveryReadyAtTrade - this.totalTrades)} ` +
+      `sniper_stake=${tradeEvent.blindSniperStake.toFixed(2)} ` +
+      `sniper_capped=${tradeEvent.blindSniperStakeCapped ? 'on' : 'off'} ` +
       `sniper_uses=${tradeEvent.blindSniperUses}/${this.options.blindSniperMaxUses} ` +
       `sniper_wait=${tradeEvent.blindSniperTradesUntilShot}`
     );
@@ -1485,6 +1529,14 @@ class DerivDigitBot extends EventEmitter {
       blindSniperArmed: sniperState.armed,
       blindSniperNextMilestone: sniperState.nextMilestone,
       blindSniperReason: sniperState.reason,
+      blindSniperStake: sniperState.stake,
+      blindSniperStakeRaw: sniperState.rawStake,
+      blindSniperStakeCapped: sniperState.stakeCapped,
+      blindSniperRemainingGap: sniperState.remainingGap,
+      blindSniperProfitAboveFloor: sniperState.profitAboveFloor,
+      blindSniperGapCap: sniperState.gapCap,
+      blindSniperProfitCap: sniperState.profitCap,
+      blindSniperProgressTaper: sniperState.progressTaper,
       martingaleLossStreak: this.martingaleLossStreak,
       martingaleRetryLimit: this.options.martingaleRetryLimit,
       splitRecoveryArmed: this.splitRecoveryArmed,
@@ -1536,6 +1588,14 @@ class DerivDigitBot extends EventEmitter {
       blindSniperArmed: sniperState.armed,
       blindSniperNextMilestone: sniperState.nextMilestone,
       blindSniperReason: sniperState.reason,
+      blindSniperStake: sniperState.stake,
+      blindSniperStakeRaw: sniperState.rawStake,
+      blindSniperStakeCapped: sniperState.stakeCapped,
+      blindSniperRemainingGap: sniperState.remainingGap,
+      blindSniperProfitAboveFloor: sniperState.profitAboveFloor,
+      blindSniperGapCap: sniperState.gapCap,
+      blindSniperProfitCap: sniperState.profitCap,
+      blindSniperProgressTaper: sniperState.progressTaper,
       martingaleLossStreak: this.martingaleLossStreak,
       martingaleRetryLimit: this.options.martingaleRetryLimit,
       splitRecoveryArmed: this.splitRecoveryArmed,
@@ -1603,6 +1663,7 @@ class DerivDigitBot extends EventEmitter {
   }
 
   snapshot() {
+    const sniperState = this.blindSniperState();
     return {
       startedAt: this.startedAt ? this.startedAt.toISOString() : null,
       paused: this.paused,
@@ -1635,6 +1696,14 @@ class DerivDigitBot extends EventEmitter {
       blindSniperStakeFraction: this.options.blindSniperStakeFraction,
       blindSniperUses: this.blindSniperUses,
       blindSniperTradesSinceLastShot: this.tradesSinceBlindSniper,
+      blindSniperStake: sniperState.stake,
+      blindSniperStakeRaw: sniperState.rawStake,
+      blindSniperStakeCapped: sniperState.stakeCapped,
+      blindSniperRemainingGap: sniperState.remainingGap,
+      blindSniperProfitAboveFloor: sniperState.profitAboveFloor,
+      blindSniperGapCap: sniperState.gapCap,
+      blindSniperProfitCap: sniperState.profitCap,
+      blindSniperProgressTaper: sniperState.progressTaper,
       splitRecoveryCooldownTrades: this.options.splitRecoveryCooldownTrades,
       splitRecoveryPieces: this.options.splitRecoveryPieces,
       splitRecoveryCapPercent: this.options.splitRecoveryCapPercent,
@@ -1739,6 +1808,7 @@ class DerivDigitBot extends EventEmitter {
 
   summary(reason) {
     const confidenceGate = this.confidenceGateState();
+    const sniperState = this.blindSniperState(confidenceGate);
     return {
       reason,
       startedAt: this.startedAt && this.startedAt.toISOString(),
@@ -1781,7 +1851,15 @@ class DerivDigitBot extends EventEmitter {
       blindSniperMilestones: this.options.blindSniperMilestones,
       blindSniperStakeFraction: this.options.blindSniperStakeFraction,
       blindSniperProgress: this.sessionProgressRatio(),
-      blindSniperNextMilestone: this.blindSniperState().nextMilestone,
+      blindSniperNextMilestone: sniperState.nextMilestone,
+      blindSniperStake: sniperState.stake,
+      blindSniperStakeRaw: sniperState.rawStake,
+      blindSniperStakeCapped: sniperState.stakeCapped,
+      blindSniperRemainingGap: sniperState.remainingGap,
+      blindSniperProfitAboveFloor: sniperState.profitAboveFloor,
+      blindSniperGapCap: sniperState.gapCap,
+      blindSniperProfitCap: sniperState.profitCap,
+      blindSniperProgressTaper: sniperState.progressTaper,
       totalTrades: this.totalTrades,
       wins: this.wins,
       losses: this.losses,
@@ -1807,6 +1885,8 @@ class DerivDigitBot extends EventEmitter {
       `martingale_streak=${summary.martingaleLossStreak} ` +
       `split_recovery=${summary.splitRecoveryArmed ? 'on' : 'off'} ` +
       `split_remaining=${summary.splitRecoveryPiecesRemaining}/${summary.splitRecoveryPieces} ` +
+      `sniper_stake=${summary.blindSniperStake.toFixed(2)} ` +
+      `sniper_capped=${summary.blindSniperStakeCapped ? 'on' : 'off'} ` +
       `sniper_marks=${(summary.blindSniperMilestones || []).map((value) => Math.round(value * 100)).join('/') || 'none'} ` +
       `sniper_uses=${summary.blindSniperUses}/${summary.blindSniperMaxUses} ` +
       `sniper_progress=${Math.round(summary.blindSniperProgress * 100)}%`
