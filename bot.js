@@ -582,6 +582,13 @@ class DerivDigitBot extends EventEmitter {
     return this.normalizeStake(rawStake, capPercent);
   }
 
+  riskyStakePercent(progress = this.progressRatio()) {
+    const progressValue = clamp(Number(progress) || 0, 0, 1);
+    return progressValue >= 0.6
+      ? this.options.riskyStakePercent * 0.5
+      : this.options.riskyStakePercent;
+  }
+
   progressRatio() {
     const span = Math.max(0.01, this.options.target - this.options.seed);
     return clamp((this.effectiveGrowthBalance() - this.options.seed) / span, 0, 1);
@@ -1052,9 +1059,19 @@ class DerivDigitBot extends EventEmitter {
     }
 
     if (this.phase === PHASES.RISKY) {
+      const progress = this.progressRatio();
+      const riskyStakePercent = this.riskyStakePercent(progress);
+      if (progress >= 0.6) {
+        this.emitAnalysis(
+          'risky_jump_reduced',
+          `Risky jump stake reduced to ${(riskyStakePercent * 100).toFixed(1)}% because ${Math.round(progress * 100)}% of the target is already reached.`,
+          { progress, riskyStakePercent }
+        );
+      }
       return {
         kind: PHASES.RISKY,
-        stake: this.normalizeStake(this.balance * this.options.riskyStakePercent, this.options.riskyStakePercent)
+        stake: this.normalizeStake(this.balance * riskyStakePercent, riskyStakePercent),
+        riskyStakePercent
       };
     }
 
@@ -1219,7 +1236,11 @@ class DerivDigitBot extends EventEmitter {
       splitRecoveryPiecesRemaining: this.splitRecoveryPiecesRemaining,
       splitRecoveryCooldownTrades: this.options.splitRecoveryCooldownTrades,
       splitRecoveryPieces: this.options.splitRecoveryPieces,
-      splitRecoveryCapPercent: this.options.splitRecoveryCapPercent
+      splitRecoveryCapPercent: this.options.splitRecoveryCapPercent,
+      progressRatio: this.progressRatio(),
+      riskyStakePercent: plan.kind === PHASES.RISKY
+        ? (plan.riskyStakePercent ?? this.riskyStakePercent())
+        : null
     };
 
     console.log(
@@ -1229,6 +1250,7 @@ class DerivDigitBot extends EventEmitter {
       `phase=${tradeEvent.phase} plan=${tradeEvent.plan} tier=${tradeEvent.growthTier} ` +
       `session_balance=${tradeEvent.effectiveGrowthBalance.toFixed(2)} overlay=${tradeEvent.sniperOverlayNet.toFixed(2)} ` +
       `growth_floor=${tradeEvent.growthFloor.toFixed(2)} floor=${this.riskFloor.toFixed(2)} debt=${this.currentRecoveryDebt().toFixed(2)} ` +
+      `risky_pct=${tradeEvent.riskyStakePercent ? (tradeEvent.riskyStakePercent * 100).toFixed(1) : 'n/a'} ` +
       `martingale_streak=${this.martingaleLossStreak} ` +
       `split_recovery=${this.splitRecoveryArmed ? 'on' : 'off'} ` +
       `split_wait=${Math.max(0, this.splitRecoveryReadyAtTrade - this.totalTrades)} ` +
