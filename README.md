@@ -13,6 +13,7 @@ The bot has no paper-trading simulator. It connects to Deriv and can run against
 - The dashboard also shows live analysis status, so you can see whether the bot is warming up, waiting for a setup, or already in a trade.
 - Session balance starts at the seed you enter. The bot uses contract profit/loss to update that session balance.
 - The bot preloads recent tick history on start so it can evaluate the 20-digit window immediately instead of waiting for a fresh warmup.
+- If a trade attempt fails, the bot now pauses briefly and keeps analyzing instead of stopping outright on the first error.
 - Volatility 100 Index symbol: `R_100`.
 - Contracts: `DIGITOVER` barrier `1`, and `DIGITUNDER` barrier `8`.
 - Last 20 digits are tracked. The bot chooses whichever condition has hit less often recently.

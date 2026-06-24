@@ -169,6 +169,7 @@ class DerivDigitBot extends EventEmitter {
       key: '',
       emittedAt: 0
     };
+    this.tradeCooldownUntil = 0;
   }
 
   async start() {
@@ -544,6 +545,15 @@ class DerivDigitBot extends EventEmitter {
       return;
     }
 
+    if (Date.now() < this.tradeCooldownUntil) {
+      this.emitAnalysis(
+        'trade_cooldown',
+        'A recent trade attempt failed. Waiting briefly before trying again.',
+        { currentDigit: tick.digit }
+      );
+      return;
+    }
+
     if (this.digits.length < this.options.windowSize) {
       this.emitAnalysis(
         'warming_up',
@@ -583,8 +593,13 @@ class DerivDigitBot extends EventEmitter {
     );
     this.placeTrade(condition, plan).catch((error) => {
       this.tradeInFlight = false;
-      this.emit('error_event', { message: error.message });
-      this.stop('trade_error');
+      this.tradeCooldownUntil = Date.now() + 3000;
+      this.emitAnalysis(
+        'trade_failed',
+        `Trade failed: ${error.message}. Pausing briefly, then the bot will keep analyzing.`,
+        { currentDigit: tick.digit, condition, plan }
+      );
+      this.emit('error_event', { message: `Trade failed: ${error.message}` });
     });
   }
 
@@ -703,7 +718,14 @@ class DerivDigitBot extends EventEmitter {
     const proposalId = proposal.proposal && proposal.proposal.id;
     if (!proposalId) throw new Error('Deriv did not return a proposal id.');
 
-    const buy = await this.send({ buy: proposalId, price: stake });
+    const proposalAskPrice = roundMoney(toNumber(proposal.proposal && proposal.proposal.ask_price, stake));
+    const buyPrice = roundMoney(Math.max(stake, proposalAskPrice + 0.01));
+    this.emitAnalysis(
+      'proposal_ready',
+      `Proposal ready for ${condition.label}. Ask price ${proposalAskPrice.toFixed(2)}. Buying at ${buyPrice.toFixed(2)}.`,
+      { condition, plan }
+    );
+    const buy = await this.send({ buy: proposalId, price: buyPrice });
     const contractId = buy.buy && buy.buy.contract_id;
     if (!contractId) throw new Error('Deriv did not return a contract id.');
 
