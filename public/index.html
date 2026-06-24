@@ -333,6 +333,21 @@
       font-size: 12px;
     }
 
+    .gate-meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .gate-meta span {
+      min-width: 0;
+    }
+
     .sparkline-wrap {
       margin-top: 14px;
       padding: 10px 12px 12px;
@@ -583,6 +598,12 @@
             <span id="progressTarget">$0.00</span>
           </div>
 
+          <div class="gate-meta">
+            <span id="gateFloorText">Protected floor $0.00</span>
+            <span id="recoveryDebtText">Recovery debt $0.00</span>
+            <span id="gateStepText">Gate step $0.00</span>
+          </div>
+
           <div class="sparkline-wrap">
             <div class="sparkline-head">
               <span>Balance Trail</span>
@@ -647,6 +668,9 @@
       progressStart: document.getElementById('progressStart'),
       progressText: document.getElementById('progressText'),
       progressTarget: document.getElementById('progressTarget'),
+      gateFloorText: document.getElementById('gateFloorText'),
+      recoveryDebtText: document.getElementById('recoveryDebtText'),
+      gateStepText: document.getElementById('gateStepText'),
       progressBar: document.getElementById('progressBar'),
       progressMarker: document.getElementById('progressMarker'),
       equityValue: document.getElementById('equityValue'),
@@ -662,6 +686,8 @@
     let currentSeed = Number(el.seed.value);
     let currentTarget = Number(el.target.value);
     let currentWindowSize = 20;
+    let currentMinStake = 0.35;
+    let currentProfitGatePercent = 0.08;
     let lastKnownAccountBalance = null;
     let equityHistory = [currentSeed];
     let lastSeriesBalance = currentSeed;
@@ -673,6 +699,7 @@
     }
 
     function maybeMoney(value) {
+      if (value === null || value === undefined || value === '') return '—';
       const numeric = Number(value);
       return Number.isFinite(numeric) ? money(numeric) : '—';
     }
@@ -770,6 +797,9 @@
       el.progressStart.textContent = money(currentSeed);
       el.progressTarget.textContent = money(currentTarget);
       el.progressText.textContent = '0.0%';
+      el.gateFloorText.textContent = `Protected floor ${money(currentSeed)}`;
+      el.recoveryDebtText.textContent = 'Recovery debt $0.00';
+      el.gateStepText.textContent = `Gate step ${money(Math.max(currentMinStake * 2, currentSeed * currentProfitGatePercent))}`;
       el.progressMarker.title = `Session equity ${money(currentSeed)}`;
       el.lastTradeText.textContent = 'Warming up...';
       el.lastTradeText.style.color = 'var(--muted)';
@@ -917,6 +947,9 @@
         : lastKnownAccountBalance;
       currentSeed = seed;
       currentTarget = target;
+      const gateFloor = Number(event.riskFloor || seed);
+      const recoveryDebt = Number(event.recoveryDebt || 0);
+      const gateStep = Number(event.gateStep || 0);
 
       const profitLoss = balance - seed;
       const delta = Number.isFinite(tradeDelta)
@@ -938,6 +971,12 @@
         el.progressTarget.textContent = money(currentTarget);
         el.progressText.textContent = `${Math.max(0, Math.min(100, ((balance - currentSeed) / Math.max(0.01, currentTarget - currentSeed)) * 100)).toFixed(1)}%`;
         el.progressMarker.title = `Session equity ${money(balance)}`;
+      }
+
+      if (source !== 'trade') {
+        el.gateFloorText.textContent = `Protected floor ${money(gateFloor)}`;
+        el.recoveryDebtText.textContent = `Recovery debt ${money(recoveryDebt)}`;
+        el.gateStepText.textContent = `Gate step ${money(gateStep)}`;
       }
 
       if (source === 'trade') {
@@ -1019,8 +1058,15 @@
       if (Number.isFinite(Number(config.windowSize))) {
         currentWindowSize = Number(config.windowSize);
       }
+      if (Number.isFinite(Number(config.minStake))) {
+        currentMinStake = Number(config.minStake);
+      }
+      if (Number.isFinite(Number(config.profitGatePercent))) {
+        currentProfitGatePercent = Number(config.profitGatePercent);
+      }
       el.guideFilters.checked = Boolean(config.guideFilters);
       el.strictBars.checked = Boolean(config.strictBarFilters);
+      el.gateStepText.textContent = `Gate step ${money(Math.max(currentMinStake * 2, currentSeed * currentProfitGatePercent))}`;
       if (config.hasEnvToken) {
         el.tokenHelp.innerHTML = 'A Deriv authorization token is loaded from <code>.env</code>. Use the mode switch to choose the account type, and fill <em>Account ID</em> only if you want to pin a specific account.';
       } else {

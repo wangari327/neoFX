@@ -136,6 +136,8 @@ class DerivDigitBot extends EventEmitter {
       baseStakePercent: toNumber(options.baseStakePercent, 0.02),
       riskyStakePercent: toNumber(options.riskyStakePercent, 0.35),
       martingaleCapPercent: toNumber(options.martingaleCapPercent, 0.4),
+      profitGatePercent: toNumber(options.profitGatePercent, 0.08),
+      recoveryBufferPercent: toNumber(options.recoveryBufferPercent, 0.05),
       windowSize: Math.max(10, Math.floor(toNumber(options.windowSize, 20))),
       guideFilters: options.guideFilters === true,
       strictBarFilters: options.strictBarFilters === true,
@@ -148,7 +150,8 @@ class DerivDigitBot extends EventEmitter {
     this.accountKind = 'unknown';
     this.phase = PHASES.GROWTH;
     this.riskFloor = this.options.seed;
-    this.failedRiskyStake = 0;
+    this.recoveryDebt = 0;
+    this.lastWinProfitRatio = 0.95;
     this.lastPipSize = 2;
 
     this.totalTrades = 0;
@@ -424,6 +427,17 @@ class DerivDigitBot extends EventEmitter {
     });
   }
 
+  profitGateStep() {
+    return roundMoney(Math.max(this.options.minStake * 2, this.options.seed * this.options.profitGatePercent));
+  }
+
+  recoveryStake() {
+    const debt = Math.max(0, this.recoveryDebt, this.riskFloor - this.balance);
+    const targetProfit = Math.max(this.options.minStake, debt * (1 + this.options.recoveryBufferPercent));
+    const winRatio = Math.max(0.01, this.lastWinProfitRatio || 0.95);
+    return targetProfit / winRatio;
+  }
+
   send(payload, timeoutMs = 15000) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error('Deriv WebSocket is not open.'));
@@ -650,8 +664,8 @@ class DerivDigitBot extends EventEmitter {
       return null;
     }
 
-    if (this.phase === PHASES.GROWTH && this.balance >= this.riskFloor * 2) {
-      this.changePhase(PHASES.RISKY, 'seed_or_floor_doubled');
+    if (this.phase === PHASES.GROWTH && this.balance >= this.riskFloor + this.profitGateStep()) {
+      this.changePhase(PHASES.RISKY, 'realized_profit_gate_hit');
     }
 
     if (this.phase === PHASES.GROWTH) {
@@ -669,13 +683,9 @@ class DerivDigitBot extends EventEmitter {
     }
 
     if (this.phase === PHASES.MARTINGALE) {
-      const cappedStake = Math.min(
-        this.failedRiskyStake * 2,
-        this.balance * this.options.martingaleCapPercent
-      );
       return {
         kind: PHASES.MARTINGALE,
-        stake: this.normalizeStake(cappedStake)
+        stake: this.normalizeStake(this.recoveryStake())
       };
     }
 
@@ -691,7 +701,8 @@ class DerivDigitBot extends EventEmitter {
 
   normalizeStake(rawStake) {
     const stake = roundMoney(Math.max(this.options.minStake, rawStake));
-    return roundMoney(clamp(stake, this.options.minStake, Math.max(this.options.minStake, this.balance)));
+    const maxStake = Math.max(this.options.minStake, this.balance * this.options.martingaleCapPercent);
+    return roundMoney(clamp(stake, this.options.minStake, maxStake));
   }
 
   async placeTrade(condition, plan) {
@@ -771,6 +782,10 @@ class DerivDigitBot extends EventEmitter {
     if (result.won) this.wins += 1;
     else this.losses += 1;
 
+    if (result.won && result.stake > 0 && Number.isFinite(result.profit) && result.profit > 0) {
+      this.lastWinProfitRatio = result.profit / result.stake;
+    }
+
     this.balance = roundMoney(this.balance + result.profit);
 
     const tradeEvent = {
@@ -786,18 +801,22 @@ class DerivDigitBot extends EventEmitter {
       phase: this.phase,
       plan: plan.kind,
       contractId: result.contractId,
-      winRate: this.winRate()
+      winRate: this.winRate(),
+      riskFloor: this.riskFloor,
+      recoveryDebt: this.recoveryDebt,
+      gateStep: this.profitGateStep()
     };
 
     console.log(
       `${tradeEvent.time} digit=${tradeEvent.digit} condition="${tradeEvent.condition}" ` +
       `stake=${tradeEvent.stake.toFixed(2)} result=${tradeEvent.result} ` +
-      `profit=${tradeEvent.profit.toFixed(2)} balance=${tradeEvent.balance.toFixed(2)} phase=${tradeEvent.phase}`
+      `profit=${tradeEvent.profit.toFixed(2)} balance=${tradeEvent.balance.toFixed(2)} ` +
+      `phase=${tradeEvent.phase} floor=${this.riskFloor.toFixed(2)} debt=${this.recoveryDebt.toFixed(2)}`
     );
 
     this.emit('trade', tradeEvent);
-    this.emitBalance();
     this.afterTrade(plan, result);
+    this.emitBalance();
   }
 
   afterTrade(plan, result) {
@@ -806,35 +825,37 @@ class DerivDigitBot extends EventEmitter {
       return;
     }
 
-    if (plan.kind === PHASES.RISKY) {
-      if (result.won) {
-        this.riskFloor = this.balance;
-        this.changePhase(PHASES.GROWTH, 'risky_jump_won_floor_logged');
-      } else {
-        this.failedRiskyStake = result.stake;
-        const baseStake = this.normalizeStake(this.balance * this.options.baseStakePercent);
-        if (this.balance >= baseStake * 4) {
-          this.changePhase(PHASES.MARTINGALE, 'risky_jump_lost_one_recovery_allowed');
+    if (result.won) {
+      this.riskFloor = Math.max(this.riskFloor, this.balance);
+      this.recoveryDebt = Math.max(0, roundMoney(this.riskFloor - this.balance));
+
+      if (plan.kind === PHASES.RISKY) {
+        this.changePhase(PHASES.GROWTH, 'risky_jump_won_floor_locked');
+      } else if (plan.kind === PHASES.MARTINGALE) {
+        if (this.recoveryDebt === 0) {
+          this.changePhase(PHASES.GROWTH, 'recovery_debt_cleared');
         } else {
-          this.changePhase(PHASES.REBUILD, 'risky_jump_lost_rebuild');
+          this.emitAnalysis(
+            'waiting_condition',
+            `Recovery win landed. ${this.recoveryDebt.toFixed(2)} still sits below the protected floor ${this.riskFloor.toFixed(2)}.`,
+            { plan, condition: result.condition }
+          );
         }
       }
-    } else if (plan.kind === PHASES.MARTINGALE) {
-      if (result.won) {
-        if (this.balance > this.riskFloor) this.riskFloor = this.balance;
-        this.failedRiskyStake = 0;
-        this.changePhase(PHASES.GROWTH, 'martingale_won');
-      } else {
-        this.failedRiskyStake = 0;
-        this.changePhase(PHASES.REBUILD, 'martingale_lost');
-      }
-    } else if (plan.kind === PHASES.REBUILD && this.balance >= this.options.seed) {
-      this.riskFloor = this.options.seed;
-      this.changePhase(PHASES.GROWTH, 'seed_recovered');
+      return;
     }
 
-    if (this.phase === PHASES.REBUILD && this.balance < this.options.seed * 0.5) {
+    this.recoveryDebt = Math.max(0, roundMoney(this.riskFloor - this.balance));
+
+    if (this.balance < this.options.seed * 0.5) {
       this.stop('stop_loss');
+      return;
+    }
+
+    if (this.balance >= this.options.minStake) {
+      this.changePhase(PHASES.MARTINGALE, 'loss_triggered_realized_profit_recovery');
+    } else {
+      this.changePhase(PHASES.REBUILD, 'loss_triggered_rebuild');
     }
   }
 
@@ -845,7 +866,7 @@ class DerivDigitBot extends EventEmitter {
     const payload = this.phasePayload(previous, nextPhase, reason);
     console.log(
       `${new Date().toISOString()} phase_change ${previous} -> ${nextPhase} ` +
-      `reason=${reason} balance=${this.balance.toFixed(2)} floor=${this.riskFloor.toFixed(2)}`
+      `reason=${reason} balance=${this.balance.toFixed(2)} floor=${this.riskFloor.toFixed(2)} debt=${this.recoveryDebt.toFixed(2)}`
     );
     this.emit('phase_change', payload);
     this.emitBalance();
@@ -859,6 +880,8 @@ class DerivDigitBot extends EventEmitter {
       reason,
       balance: this.balance,
       riskFloor: this.riskFloor,
+      recoveryDebt: this.recoveryDebt,
+      gateStep: this.profitGateStep(),
       seed: this.options.seed,
       target: this.options.target
     };
@@ -876,7 +899,9 @@ class DerivDigitBot extends EventEmitter {
       wins: this.wins,
       losses: this.losses,
       winRate: this.winRate(),
-      riskFloor: this.riskFloor
+      riskFloor: this.riskFloor,
+      recoveryDebt: this.recoveryDebt,
+      gateStep: this.profitGateStep()
     });
   }
 
@@ -890,6 +915,8 @@ class DerivDigitBot extends EventEmitter {
       phase: this.phase,
       seed: this.options.seed,
       target: this.options.target,
+      riskFloor: this.riskFloor,
+      recoveryDebt: this.recoveryDebt,
       balance: this.balance
     });
   }
@@ -928,6 +955,9 @@ class DerivDigitBot extends EventEmitter {
       accountId: this.options.accountId || null,
       accountKind: this.accountKind,
       symbol: this.options.symbol,
+      riskFloor: this.riskFloor,
+      recoveryDebt: this.recoveryDebt,
+      gateStep: this.profitGateStep(),
       totalTrades: this.totalTrades,
       wins: this.wins,
       losses: this.losses,
@@ -944,7 +974,10 @@ class DerivDigitBot extends EventEmitter {
     console.log('===== BOT SUMMARY =====');
     console.log(`reason=${summary.reason}`);
     console.log(`trades=${summary.totalTrades} wins=${summary.wins} losses=${summary.losses} win_rate=${summary.winRate}%`);
-    console.log(`start=${summary.startingBalance.toFixed(2)} final=${summary.finalBalance.toFixed(2)} net=${summary.netProfit.toFixed(2)}`);
+    console.log(
+      `start=${summary.startingBalance.toFixed(2)} final=${summary.finalBalance.toFixed(2)} ` +
+      `net=${summary.netProfit.toFixed(2)} floor=${summary.riskFloor.toFixed(2)} debt=${summary.recoveryDebt.toFixed(2)}`
+    );
     console.log('=======================');
   }
 }

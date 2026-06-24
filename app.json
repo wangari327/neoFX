@@ -76,8 +76,18 @@
       "required": false
     },
     "MARTINGALE_CAP_PERCENT": {
-      "description": "Maximum martingale stake as a fraction of remaining balance.",
+      "description": "Maximum stake exposure as a fraction of remaining balance.",
       "value": "0.40",
+      "required": false
+    },
+    "PROFIT_GATE_PERCENT": {
+      "description": "Profit increment needed before the bot attempts a higher-risk cycle.",
+      "value": "0.08",
+      "required": false
+    },
+    "RECOVERY_BUFFER_PERCENT": {
+      "description": "Extra profit margin added to recovery stakes so they can reclaim the protected floor faster.",
+      "value": "0.05",
       "required": false
     },
     "WINDOW_SIZE": {

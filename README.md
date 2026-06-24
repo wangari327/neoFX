@@ -30,20 +30,23 @@ Growth mode:
 
 - Base stake is 2 percent of session balance.
 - Minimum stake is `$0.35`.
-- When session balance reaches 2x the current floor, the bot enters Risky Jump.
-- The first floor is the seed. A winning Risky Jump logs a new floor.
+- The bot tracks a protected realized-profit floor.
+- When session balance reaches the protected floor plus the profit gate step, the bot enters Risky Jump.
+- The gate step defaults to 8 percent of the seed, or at least two minimum stakes, whichever is higher.
+- Every winning trade can push the protected floor higher.
 
 Risky Jump:
 
 - One stake at 35 percent of current session balance.
-- Win: log new floor and return to Growth mode.
-- Loss: enter one-recovery Martingale if the remaining balance is at least 4x the current base stake.
+- Win: lock the new floor and return to Growth mode.
+- Loss: enter recovery mode, where the next stake is sized from the realized loss and capped so it cannot consume the full session balance.
 
 Martingale:
 
-- One stake at 2x the failed risky stake, capped at 40 percent of remaining session balance.
-- Win: return to Growth mode.
-- Loss: enter Rebuild mode.
+- Recovery stakes are calculated from the amount needed to get back to the protected floor, plus a small buffer.
+- The recovery stake is always capped at 40 percent of the remaining session balance.
+- Win: return to Growth mode once the protected floor is regained.
+- Loss: stay in recovery until the floor is regained, or enter Rebuild mode if the balance becomes too small.
 
 Rebuild:
 
@@ -88,6 +91,8 @@ MIN_STAKE=0.35
 BASE_STAKE_PERCENT=0.02
 RISKY_STAKE_PERCENT=0.35
 MARTINGALE_CAP_PERCENT=0.40
+PROFIT_GATE_PERCENT=0.08
+RECOVERY_BUFFER_PERCENT=0.05
 WINDOW_SIZE=20
 GUIDE_FILTERS=false
 STRICT_BAR_FILTERS=false

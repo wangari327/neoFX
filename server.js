@@ -55,9 +55,12 @@ function publicConfig() {
   return {
     defaultMode: process.env.DEFAULT_MODE || 'demo',
     defaultSymbol: process.env.SYMBOL || 'R_100',
+    minStake: numberFrom(process.env.MIN_STAKE, 0.35),
     windowSize: numberFrom(process.env.WINDOW_SIZE, 20),
     guideFilters: boolFrom(process.env.GUIDE_FILTERS, false),
     strictBarFilters: boolFrom(process.env.STRICT_BAR_FILTERS, false),
+    profitGatePercent: numberFrom(process.env.PROFIT_GATE_PERCENT, 0.08),
+    recoveryBufferPercent: numberFrom(process.env.RECOVERY_BUFFER_PERCENT, 0.05),
     hasEnvToken: Boolean(
       process.env.DERIV_API_TOKEN ||
       process.env.DERIV_DEMO_API_TOKEN ||
@@ -109,6 +112,8 @@ function sanitizeStartPayload(payload = {}) {
     baseStakePercent: numberFrom(process.env.BASE_STAKE_PERCENT, 0.02),
     riskyStakePercent: numberFrom(process.env.RISKY_STAKE_PERCENT, 0.35),
     martingaleCapPercent: numberFrom(process.env.MARTINGALE_CAP_PERCENT, 0.4),
+    profitGatePercent: numberFrom(process.env.PROFIT_GATE_PERCENT, 0.08),
+    recoveryBufferPercent: numberFrom(process.env.RECOVERY_BUFFER_PERCENT, 0.05),
     windowSize: numberFrom(process.env.WINDOW_SIZE, 20),
     guideFilters: boolFrom(payload.guideFilters, boolFrom(process.env.GUIDE_FILTERS, false)),
     strictBarFilters: boolFrom(payload.strictBarFilters, boolFrom(process.env.STRICT_BAR_FILTERS, false))
