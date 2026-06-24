@@ -220,6 +220,7 @@ class DerivDigitBot extends EventEmitter {
     this.initialStakeUsed = false;
     this.blindSniperUses = 0;
     this.tradesSinceBlindSniper = 0;
+    this.sniperOverlayNet = 0;
 
     this.totalTrades = 0;
     this.wins = 0;
@@ -554,7 +555,7 @@ class DerivDigitBot extends EventEmitter {
     const step = this.growthMilestoneStep();
     if (step <= 0) return 0;
     const anchor = Number.isFinite(this.growthAnchorBalance) ? this.growthAnchorBalance : this.options.seed;
-    const profitAboveAnchor = Math.max(0, this.balance - anchor);
+    const profitAboveAnchor = Math.max(0, this.effectiveGrowthBalance() - anchor);
     return Math.floor(profitAboveAnchor / step);
   }
 
@@ -575,7 +576,7 @@ class DerivDigitBot extends EventEmitter {
 
   growthStake() {
     const rawStake = Math.max(
-      this.balance * this.options.baseStakePercent,
+      this.effectiveGrowthBalance() * this.options.baseStakePercent,
       this.growthStakeFloor()
     );
     return this.normalizeStake(rawStake, this.options.growthStakeCapPercent);
@@ -586,8 +587,12 @@ class DerivDigitBot extends EventEmitter {
     return clamp((this.balance - this.options.seed) / span, 0, 1);
   }
 
+  effectiveGrowthBalance() {
+    return roundMoney(this.balance - this.sniperOverlayNet);
+  }
+
   currentRecoveryDebt() {
-    return Math.max(0, roundMoney(this.riskFloor - this.balance));
+    return Math.max(0, roundMoney(this.riskFloor - this.effectiveGrowthBalance()));
   }
 
   blindSniperState() {
@@ -1002,7 +1007,11 @@ class DerivDigitBot extends EventEmitter {
       };
     }
 
-    if (this.phase === PHASES.GROWTH && !this.splitRecoveryArmed && this.balance >= this.riskFloor + this.profitGateStep()) {
+    if (
+      this.phase === PHASES.GROWTH &&
+      !this.splitRecoveryArmed &&
+      this.effectiveGrowthBalance() >= this.riskFloor + this.profitGateStep()
+    ) {
       this.changePhase(PHASES.RISKY, 'realized_profit_gate_hit');
     }
 
@@ -1124,6 +1133,7 @@ class DerivDigitBot extends EventEmitter {
     if (plan.kind === PHASES.BLIND_SNIPER) {
       this.blindSniperUses += 1;
       this.tradesSinceBlindSniper = 0;
+      this.sniperOverlayNet = roundMoney(this.sniperOverlayNet + result.profit);
     } else {
       this.tradesSinceBlindSniper += 1;
     }
@@ -1147,6 +1157,8 @@ class DerivDigitBot extends EventEmitter {
       result: result.won ? 'Win' : 'Loss',
       profit: result.profit,
       balance: this.balance,
+      effectiveGrowthBalance: this.effectiveGrowthBalance(),
+      sniperOverlayNet: this.sniperOverlayNet,
       accountBalance: this.accountBalance,
       phase: this.phase,
       plan: plan.kind,
@@ -1186,6 +1198,7 @@ class DerivDigitBot extends EventEmitter {
       `stake=${tradeEvent.stake.toFixed(2)} result=${tradeEvent.result} ` +
       `profit=${tradeEvent.profit.toFixed(2)} balance=${tradeEvent.balance.toFixed(2)} ` +
       `phase=${tradeEvent.phase} plan=${tradeEvent.plan} tier=${tradeEvent.growthTier} ` +
+      `growth_balance=${tradeEvent.effectiveGrowthBalance.toFixed(2)} overlay=${tradeEvent.sniperOverlayNet.toFixed(2)} ` +
       `growth_floor=${tradeEvent.growthFloor.toFixed(2)} floor=${this.riskFloor.toFixed(2)} debt=${this.currentRecoveryDebt().toFixed(2)} ` +
       `martingale_streak=${this.martingaleLossStreak} ` +
       `split_recovery=${this.splitRecoveryArmed ? 'on' : 'off'} ` +
@@ -1212,18 +1225,18 @@ class DerivDigitBot extends EventEmitter {
     if (result.won) {
       this.martingaleLossStreak = 0;
       if (plan.kind === PHASES.RISKY) {
-        this.riskFloor = Math.max(this.riskFloor, this.balance);
+        this.riskFloor = Math.max(this.riskFloor, this.effectiveGrowthBalance());
         this.recoveryDebt = 0;
-        this.growthAnchorBalance = this.balance;
+        this.growthAnchorBalance = this.effectiveGrowthBalance();
         this.clearSplitRecovery(null);
         this.changePhase(PHASES.GROWTH, 'risky_jump_won_floor_locked');
         return;
       }
 
       if (plan.kind === PHASES.MARTINGALE || plan.kind === 'split_recovery') {
-        this.riskFloor = this.balance;
+        this.riskFloor = this.effectiveGrowthBalance();
         this.recoveryDebt = 0;
-        this.growthAnchorBalance = this.balance;
+        this.growthAnchorBalance = this.effectiveGrowthBalance();
         this.clearSplitRecovery(null);
         this.changePhase(
           PHASES.GROWTH,
@@ -1290,7 +1303,7 @@ class DerivDigitBot extends EventEmitter {
     const payload = this.phasePayload(previous, nextPhase, reason);
     console.log(
       `${new Date().toISOString()} phase_change ${previous} -> ${nextPhase} ` +
-      `reason=${reason} balance=${this.balance.toFixed(2)} tier=${this.growthTier()} ` +
+      `reason=${reason} balance=${this.balance.toFixed(2)} growth_balance=${this.effectiveGrowthBalance().toFixed(2)} tier=${this.growthTier()} ` +
       `floor=${this.riskFloor.toFixed(2)} debt=${this.currentRecoveryDebt().toFixed(2)}`
     );
     this.emit('phase_change', payload);
@@ -1307,6 +1320,8 @@ class DerivDigitBot extends EventEmitter {
       balance: this.balance,
       riskFloor: this.riskFloor,
       recoveryDebt: this.currentRecoveryDebt(),
+      effectiveGrowthBalance: this.effectiveGrowthBalance(),
+      sniperOverlayNet: this.sniperOverlayNet,
       growthTier: this.growthTier(),
       growthStep: this.growthMilestoneStep(),
       growthFloor: this.growthStakeFloor(),
@@ -1356,6 +1371,8 @@ class DerivDigitBot extends EventEmitter {
       winRate: this.winRate(),
       riskFloor: this.riskFloor,
       recoveryDebt: this.currentRecoveryDebt(),
+      effectiveGrowthBalance: this.effectiveGrowthBalance(),
+      sniperOverlayNet: this.sniperOverlayNet,
       growthTier: this.growthTier(),
       growthStep: this.growthMilestoneStep(),
       growthFloor: this.growthStakeFloor(),
@@ -1404,6 +1421,8 @@ class DerivDigitBot extends EventEmitter {
       target: this.options.target,
       riskFloor: this.riskFloor,
       recoveryDebt: this.currentRecoveryDebt(),
+      effectiveGrowthBalance: this.effectiveGrowthBalance(),
+      sniperOverlayNet: this.sniperOverlayNet,
       growthTier: this.growthTier(),
       growthStep: this.growthMilestoneStep(),
       growthFloor: this.growthStakeFloor(),
@@ -1448,6 +1467,8 @@ class DerivDigitBot extends EventEmitter {
       phase: this.phase,
       riskFloor: this.riskFloor,
       recoveryDebt: this.currentRecoveryDebt(),
+      effectiveGrowthBalance: this.effectiveGrowthBalance(),
+      sniperOverlayNet: this.sniperOverlayNet,
       lastWinProfitRatio: this.lastWinProfitRatio,
       lastPipSize: this.lastPipSize,
       growthAnchorBalance: this.growthAnchorBalance,
@@ -1503,6 +1524,7 @@ class DerivDigitBot extends EventEmitter {
     this.phase = snapshot.phase || this.phase;
     this.riskFloor = roundMoney(toNumber(snapshot.riskFloor, this.riskFloor));
     this.recoveryDebt = roundMoney(toNumber(snapshot.recoveryDebt, this.recoveryDebt));
+    this.sniperOverlayNet = roundMoney(toNumber(snapshot.sniperOverlayNet, this.sniperOverlayNet));
     this.lastWinProfitRatio = toNumber(snapshot.lastWinProfitRatio, this.lastWinProfitRatio);
     this.lastPipSize = toNumber(snapshot.lastPipSize, this.lastPipSize);
     this.growthAnchorBalance = roundMoney(toNumber(snapshot.growthAnchorBalance, this.growthAnchorBalance));
@@ -1577,6 +1599,8 @@ class DerivDigitBot extends EventEmitter {
       symbol: this.options.symbol,
       riskFloor: this.riskFloor,
       recoveryDebt: this.currentRecoveryDebt(),
+      effectiveGrowthBalance: this.effectiveGrowthBalance(),
+      sniperOverlayNet: this.sniperOverlayNet,
       growthTier: this.growthTier(),
       growthStep: this.growthMilestoneStep(),
       growthFloor: this.growthStakeFloor(),
