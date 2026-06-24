@@ -539,12 +539,12 @@
         </div>
 
         <div class="switch-row">
-          <label for="guideFilters">Guide filters</label>
+          <label for="guideFilters" title="Extra entry checks from the strategy notes. They reduce trade count by waiting for the digit window to look favorable.">Guide filters</label>
           <input id="guideFilters" type="checkbox" checked>
         </div>
 
         <div class="switch-row">
-          <label for="strictBars">Strict bars</label>
+          <label for="strictBars" title="A stricter version of the guide filters. It blocks more entries and usually means fewer trades.">Strict bars</label>
           <input id="strictBars" type="checkbox">
         </div>
 
@@ -556,7 +556,7 @@
 
       <section class="panel">
         <div class="stats">
-          <div class="stat"><span>Current Balance</span><strong id="balance">$0.00</strong></div>
+          <div class="stat"><span>Account Balance</span><strong id="balance">—</strong></div>
           <div class="stat"><span>Current Phase</span><strong id="phase">Idle</strong></div>
           <div class="stat"><span>Total Trades</span><strong id="trades">0</strong></div>
           <div class="stat"><span>Win Rate</span><strong id="winRate">0%</strong></div>
@@ -574,7 +574,7 @@
 
           <div class="equity-rail" id="equityRail">
             <div id="progressBar" class="progress"></div>
-            <div id="progressMarker" class="progress-marker" title="Current balance"></div>
+            <div id="progressMarker" class="progress-marker" title="Session equity"></div>
           </div>
 
           <div class="rail-legend">
@@ -653,6 +653,7 @@
     let logStarted = false;
     let currentSeed = Number(el.seed.value);
     let currentTarget = Number(el.target.value);
+    let lastKnownAccountBalance = null;
     let equityHistory = [currentSeed];
     let lastSeriesBalance = currentSeed;
     let lastRenderedBalance = currentSeed;
@@ -660,6 +661,11 @@
 
     function money(value) {
       return `$${Number(value || 0).toFixed(2)}`;
+    }
+
+    function maybeMoney(value) {
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? money(numeric) : '—';
     }
 
     function signedMoney(value) {
@@ -704,6 +710,8 @@
       lastSeriesBalance = currentSeed;
       lastRenderedBalance = currentSeed;
       lastRenderedTrades = 0;
+      lastKnownAccountBalance = null;
+      el.balance.textContent = '—';
       el.equityValue.textContent = money(currentSeed);
       el.equityDelta.textContent = '+$0.00';
       el.equityDelta.classList.remove('win', 'loss', 'pulse');
@@ -716,7 +724,7 @@
       el.progressStart.textContent = money(currentSeed);
       el.progressTarget.textContent = money(currentTarget);
       el.progressText.textContent = '0.0%';
-      el.progressMarker.title = `Current balance ${money(currentSeed)}`;
+      el.progressMarker.title = `Session equity ${money(currentSeed)}`;
       el.lastTradeText.textContent = 'Waiting for first trade';
       el.lastTradeText.style.color = 'var(--muted)';
       drawEquityChart();
@@ -851,13 +859,16 @@
       el.progressText.textContent = `${pct.toFixed(1)}%`;
       el.progressStart.textContent = money(currentSeed);
       el.progressTarget.textContent = money(currentTarget);
-      el.progressMarker.title = `Current balance ${money(next)}`;
+      el.progressMarker.title = `Session equity ${money(next)}`;
     }
 
     function updateStats(event, tradeDelta, source) {
       const balance = Number(event.balance || 0);
       const seed = Number(event.seed || currentSeed);
       const target = Number(event.target || currentTarget);
+      const accountBalanceValue = Number.isFinite(Number(event.accountBalance))
+        ? Number(event.accountBalance)
+        : lastKnownAccountBalance;
       currentSeed = seed;
       currentTarget = target;
 
@@ -867,7 +878,7 @@
         : (Number.isFinite(lastRenderedBalance) ? balance - lastRenderedBalance : 0);
       const shouldAnimate = source === 'trade' || Math.abs(balance - lastRenderedBalance) > 0.0001;
 
-      el.balance.textContent = money(balance);
+      el.balance.textContent = maybeMoney(accountBalanceValue);
       el.phase.textContent = phaseName(event.phase);
       el.trades.textContent = event.totalTrades || 0;
       el.winRate.textContent = `${Number(event.winRate || 0).toFixed(1)}%`;
@@ -880,7 +891,7 @@
         el.progressStart.textContent = money(currentSeed);
         el.progressTarget.textContent = money(currentTarget);
         el.progressText.textContent = `${Math.max(0, Math.min(100, ((balance - currentSeed) / Math.max(0.01, currentTarget - currentSeed)) * 100)).toFixed(1)}%`;
-        el.progressMarker.title = `Current balance ${money(balance)}`;
+        el.progressMarker.title = `Session equity ${money(balance)}`;
       }
 
       if (source === 'trade') {
@@ -888,6 +899,9 @@
         el.lastTradeText.style.color = event.profit >= 0 ? 'var(--green)' : 'var(--red)';
       }
 
+      if (Number.isFinite(accountBalanceValue)) {
+        lastKnownAccountBalance = accountBalanceValue;
+      }
       lastRenderedBalance = balance;
       lastRenderedTrades = Number(event.totalTrades || lastRenderedTrades);
     }
@@ -962,6 +976,14 @@
         el.tokenHelp.innerHTML = 'A Deriv authorization token is loaded from <code>.env</code>. Use the mode switch to choose the account type, and fill <em>Account ID</em> only if you want to pin a specific account.';
       } else {
         el.tokenHelp.innerHTML = 'Store one Deriv authorization token in <code>.env</code> or paste one here for a single run.';
+      }
+    });
+
+    socket.on('account', (event) => {
+      const accountBalance = Number(event.balance);
+      if (Number.isFinite(accountBalance)) {
+        lastKnownAccountBalance = accountBalance;
+        el.balance.textContent = money(accountBalance);
       }
     });
 

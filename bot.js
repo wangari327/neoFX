@@ -102,11 +102,16 @@ async function requestJson(url, options = {}) {
   }
 
   if (!response.ok) {
-    const message =
+    const fallbackMessage =
       payload?.errors?.[0]?.message ||
       payload?.error?.message ||
       payload?.message ||
       `Deriv request failed with status ${response.status}.`;
+    const message = response.status === 401
+      ? 'Deriv rejected the authorization token. Check DERIV_API_TOKEN and make sure it has trade scope.'
+      : response.status === 403
+        ? 'Deriv denied access. Check the token permissions and account access.'
+        : fallbackMessage;
     throw new Error(message);
   }
 

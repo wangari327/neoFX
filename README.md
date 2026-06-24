@@ -9,6 +9,7 @@ The bot has no paper-trading simulator. It connects to Deriv and can run against
 - Node.js, `ws`, `express`, `socket.io`, no frontend framework, no TypeScript.
 - Dashboard inputs for a single Deriv authorization token, optional account ID, seed, target, demo/real mode, guide filters, and strict bar filters.
 - Demo/real mode selects which account type the bot requests from Deriv. If you pin an account ID, it must match the selected mode.
+- The dashboard shows both the live Deriv account balance and the bot's session equity, so you can tell real funds from the seed-based strategy ledger.
 - Session balance starts at the seed you enter. The bot uses contract profit/loss to update that session balance.
 - Volatility 100 Index symbol: `R_100`.
 - Contracts: `DIGITOVER` barrier `1`, and `DIGITUNDER` barrier `8`.
