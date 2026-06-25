@@ -1513,8 +1513,9 @@
     function autoCycleCompletedLabel(event = {}) {
       const completed = Number(event.autoCycleCompleted || 0);
       const recycled = Number(event.autoCycleRecycled || 0);
+      const partial = Number(event.autoCyclePartialLocked || 0);
       const banked = Number(event.autoCycleBankedProfit || 0);
-      const cycle = completed + recycled + 1;
+      const cycle = completed + recycled + partial + 1;
       return `${cycle} - banked ${money(banked)}`;
     }
 
@@ -2939,7 +2940,9 @@
         currentBlindSniperStakeFraction = Number(event.blindSniperStakeFraction);
       }
 
-      const profitLoss = balance - seed;
+      const profitLoss = Number.isFinite(Number(event.profitLoss))
+        ? Number(event.profitLoss)
+        : balance - seed;
       const growthProfitLoss = growthBalance - seed;
       const delta = Number.isFinite(tradeDelta)
         ? Number(tradeDelta)

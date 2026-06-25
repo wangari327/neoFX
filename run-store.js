@@ -75,6 +75,8 @@ function mapRun(doc) {
           ? Number(snapshot.balance) - Number(snapshot.seed)
           : undefined
     ),
+    netProfitLoss: toNumberOrNull(doc.netProfitLoss ?? snapshot?.netProfitLoss),
+    openCycleProfitLoss: toNumberOrNull(doc.openCycleProfitLoss ?? snapshot?.openCycleProfitLoss),
     totalTrades: Number(doc.totalTrades ?? snapshot?.totalTrades ?? 0),
     wins: Number(doc.wins ?? snapshot?.wins ?? 0),
     losses: Number(doc.losses ?? snapshot?.losses ?? 0),

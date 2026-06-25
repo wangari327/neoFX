@@ -24,8 +24,9 @@ The bot has no paper-trading simulator. It connects to Deriv and can run against
 - Profit aggression is a 1-5 dashboard slider. Higher values start compact-target profit-push trades earlier, increase growth/profit pressure, and shorten risk cooldowns while still blocking snipes and martingale revenge during weak win-rate conditions.
 - Auto-cycle mode is enabled by default when Auto mode is on. It repeats small seed-sized profit cycles instead of trying to solve the whole target in one long run.
 - Auto-cycle uses the proven compact manual preset by default: Volatility 10, base Over 1 / Under 8, phased engine, loss-pressure stairs, profit aggression 4, and sniper marks at 25 and 50 if sniper is enabled.
-- Auto-cycle defaults to seed x 10 percent cycle profit and seed x 5 percent cycle stake. Example: `$10` seed targets `$11` per cycle with a `$0.50` stake floor; an overall `$5` profit goal becomes five `$1` cycles.
-- Auto-cycle banks completed cycle profit and resets the active cycle ledger back to the original seed. Banked profit is not used as hidden collateral for the next cycle.
+- Auto-cycle defaults to seed x 10 percent cycle profit and seed x 5 percent cycle stake. Example: `$10` seed targets `$11` per cycle with a `$0.50` stake floor; an overall `$5` profit goal becomes five `$1` banked cycles.
+- Auto-cycle treats the dashboard target as a banked-profit goal. Example: seed `$10`, target `$15` means stop after `$5` closed-cycle profit, not because active cycle equity reaches `$15`.
+- Auto-cycle banks completed cycle profit and resets the active cycle ledger back to the original seed. Banked profit is tracked separately and is not added to the next cycle's stakeable ledger.
 - If a cycle struggles below seed for a long time, Auto-cycle can cut the loop early: after 60 cycle trades, a recovery to at least 50 percent of the cycle profit target is banked and restarted; after 100 cycle trades, a recovery back to seed recycles the cycle at break-even.
 - Legacy Auto commander behavior is still available by disabling Auto-cycle. It can dynamically tune approved weapons after launch, starting in Scout/Grind and unlocking Pressure or Blast only when recovery debt is clear, win rate is acceptable, and enough profit sits above the protected floor.
 - The dashboard includes an Auto decision ticker and a compact Auto log so you can see why Auto changed symbol, strategy, sniper, stairs, or aggression.
@@ -70,7 +71,7 @@ The extreme selector no longer uses the base strategy's "cooler side" rule. That
 
 Auto mode is a bounded rule-based commander, not machine learning and not unlimited revenge trading.
 
-By default, Auto runs in Auto-cycle mode. The user sets seed and total target; Auto converts that into repeated micro-runs. For example, seed `$10`, target `$15`, and default cycle profit `$1` means the bot runs five isolated `$10 -> $11` cycles. After each completed cycle, the active ledger resets to `$10` and the profit is banked toward the overall target.
+By default, Auto runs in Auto-cycle mode. The user sets seed and total target; Auto converts that into repeated micro-runs. For example, seed `$10`, target `$15`, and default cycle profit `$1` means the bot runs five isolated `$10 -> $11` cycles. After each completed cycle, the active ledger resets to `$10` and the profit is banked toward the overall target. The next cycle does not compound from the prior cycle's banked profit.
 
 Auto-cycle exits:
 

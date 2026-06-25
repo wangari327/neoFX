@@ -375,6 +375,15 @@ function summarizeRun(run, reason = run?.reason || 'manual') {
   const wins = Number(snapshot.wins ?? run.wins ?? 0);
   const losses = Number(snapshot.losses ?? run.losses ?? 0);
   const winRate = totalTrades ? roundMoney((wins / totalTrades) * 100) : 0;
+  const autoCycleMode = Boolean(snapshot.autoCycleMode ?? run.autoCycleMode ?? run.config?.autoCycleMode ?? false);
+  const autoCycleBankedProfit = Number(snapshot.autoCycleBankedProfit ?? run.autoCycleBankedProfit ?? 0);
+  const netProfit = autoCycleMode
+    ? roundMoney(Number(snapshot.netProfitLoss ?? run.netProfitLoss ?? autoCycleBankedProfit + finalBalance - seed))
+    : roundMoney(finalBalance - seed);
+  const realizedProfit = autoCycleMode
+    ? roundMoney(Number(snapshot.profitLoss ?? run.profitLoss ?? autoCycleBankedProfit))
+    : netProfit;
+  const summarizedFinalBalance = roundMoney(seed + netProfit);
 
   return {
     reason,
@@ -388,10 +397,10 @@ function summarizeRun(run, reason = run?.reason || 'manual') {
     targetSizingMode: normalizeTargetSizingMode(snapshot.targetSizingMode ?? run.targetSizingMode ?? run.config?.targetSizingMode),
     invertDigitSignal: Boolean(snapshot.invertDigitSignal ?? run.invertDigitSignal ?? run.config?.invertDigitSignal ?? false),
     autoModeEnabled: Boolean(snapshot.autoModeEnabled ?? run.autoModeEnabled ?? run.config?.autoModeEnabled ?? false),
-    autoCycleMode: Boolean(snapshot.autoCycleMode ?? run.autoCycleMode ?? run.config?.autoCycleMode ?? false),
+    autoCycleMode,
     autoCycleProfit: Number(snapshot.autoCycleProfit ?? run.autoCycleProfit ?? run.config?.autoCycleProfit ?? 0),
     autoCycleStake: Number(snapshot.autoCycleStake ?? run.autoCycleStake ?? run.config?.autoCycleStake ?? 0),
-    autoCycleBankedProfit: Number(snapshot.autoCycleBankedProfit ?? run.autoCycleBankedProfit ?? 0),
+    autoCycleBankedProfit,
     autoCycleCompleted: Number(snapshot.autoCycleCompleted ?? run.autoCycleCompleted ?? 0),
     autoCycleRecycled: Number(snapshot.autoCycleRecycled ?? run.autoCycleRecycled ?? 0),
     autoCyclePartialLocked: Number(snapshot.autoCyclePartialLocked ?? run.autoCyclePartialLocked ?? 0),
@@ -463,8 +472,10 @@ function summarizeRun(run, reason = run?.reason || 'manual') {
     losses,
     winRate,
     startingBalance: seed,
-    finalBalance,
-    netProfit: roundMoney(finalBalance - seed),
+    finalBalance: summarizedFinalBalance,
+    activeCycleBalance: autoCycleMode ? finalBalance : null,
+    realizedProfit,
+    netProfit,
     target,
     blindSniperEnabled: Boolean(snapshot.blindSniperEnabled ?? run.blindSniperEnabled ?? run.config?.blindSniperEnabled ?? false),
     blindSniperUses: Number(snapshot.blindSniperUses ?? run.blindSniperUses ?? run.config?.blindSniperUses ?? 0),
@@ -655,6 +666,14 @@ function runBalanceState(run) {
   const blindSniperGapCapValue = Number(snapshot.blindSniperGapCap ?? run.blindSniperGapCap);
   const blindSniperProfitCapValue = Number(snapshot.blindSniperProfitCap ?? run.blindSniperProfitCap);
   const blindSniperProgressTaperValue = Number(snapshot.blindSniperProgressTaper ?? run.blindSniperProgressTaper);
+  const autoCycleMode = Boolean(snapshot.autoCycleMode ?? run.autoCycleMode ?? run.config?.autoCycleMode ?? false);
+  const autoCycleBankedProfit = Number(snapshot.autoCycleBankedProfit ?? run.autoCycleBankedProfit ?? 0);
+  const profitLoss = autoCycleMode
+    ? roundMoney(Number(snapshot.profitLoss ?? run.profitLoss ?? autoCycleBankedProfit))
+    : roundMoney(balance - seed);
+  const netProfitLoss = autoCycleMode
+    ? roundMoney(Number(snapshot.netProfitLoss ?? run.netProfitLoss ?? autoCycleBankedProfit + balance - seed))
+    : profitLoss;
 
   return {
     runId: run.id,
@@ -667,6 +686,23 @@ function runBalanceState(run) {
     targetSizingMode: normalizeTargetSizingMode(snapshot.targetSizingMode ?? run.targetSizingMode ?? run.config?.targetSizingMode),
     invertDigitSignal: Boolean(snapshot.invertDigitSignal ?? run.invertDigitSignal ?? run.config?.invertDigitSignal ?? false),
     autoModeEnabled: Boolean(snapshot.autoModeEnabled ?? run.autoModeEnabled ?? run.config?.autoModeEnabled ?? false),
+    autoCycleMode,
+    autoCycleProfit: Number(snapshot.autoCycleProfit ?? run.autoCycleProfit ?? run.config?.autoCycleProfit ?? 0),
+    autoCycleStake: Number(snapshot.autoCycleStake ?? run.autoCycleStake ?? run.config?.autoCycleStake ?? 0),
+    autoCycleBankedProfit,
+    autoCycleCompleted: Number(snapshot.autoCycleCompleted ?? run.autoCycleCompleted ?? 0),
+    autoCycleRecycled: Number(snapshot.autoCycleRecycled ?? run.autoCycleRecycled ?? 0),
+    autoCyclePartialLocked: Number(snapshot.autoCyclePartialLocked ?? run.autoCyclePartialLocked ?? 0),
+    autoCycleHardRecovery: Boolean(snapshot.autoCycleHardRecovery ?? run.autoCycleHardRecovery ?? false),
+    autoCycleStartTrade: Number(snapshot.autoCycleStartTrade ?? run.autoCycleStartTrade ?? 0),
+    autoCycleTrades: Number(snapshot.autoCycleTrades ?? run.autoCycleTrades ?? 0),
+    autoCycleMinBalance: Number(snapshot.autoCycleMinBalance ?? run.autoCycleMinBalance ?? seed),
+    autoCycleStruggled: Boolean(snapshot.autoCycleStruggled ?? run.autoCycleStruggled ?? false),
+    autoCyclePartialExitTradeThreshold: Number(snapshot.autoCyclePartialExitTradeThreshold ?? run.autoCyclePartialExitTradeThreshold ?? 60),
+    autoCyclePartialExitProfitRatio: Number(snapshot.autoCyclePartialExitProfitRatio ?? run.autoCyclePartialExitProfitRatio ?? 0.5),
+    autoCycleRecycleTradeThreshold: Number(snapshot.autoCycleRecycleTradeThreshold ?? run.autoCycleRecycleTradeThreshold ?? 100),
+    strategyTarget: Number(snapshot.strategyTarget ?? run.strategyTarget ?? target),
+    overallProgressRatio: Number(snapshot.overallProgressRatio ?? run.overallProgressRatio ?? 0),
     autoRiskProfile: normalizeAutoRiskProfile(snapshot.autoRiskProfile ?? run.autoRiskProfile ?? run.config?.autoRiskProfile),
     autoState: snapshot.autoState ?? run.autoState ?? null,
     autoReason: snapshot.autoReason ?? run.autoReason ?? '',
@@ -679,7 +715,11 @@ function runBalanceState(run) {
     matchSniperMaxCount: Number(snapshot.matchSniperMaxCount ?? run.matchSniperMaxCount ?? run.config?.matchSniperMaxCount ?? 1),
     seed,
     target,
-    profitLoss: roundMoney(balance - seed),
+    profitLoss,
+    netProfitLoss,
+    openCycleProfitLoss: autoCycleMode
+      ? roundMoney(Number(snapshot.openCycleProfitLoss ?? run.openCycleProfitLoss ?? balance - seed))
+      : 0,
     totalTrades,
     wins,
     losses,
@@ -920,6 +960,9 @@ function bindBot(bot) {
         autoCycleRecycleTradeThreshold: event.autoCycleRecycleTradeThreshold,
         strategyTarget: event.strategyTarget,
         overallProgressRatio: event.overallProgressRatio,
+        profitLoss: event.profitLoss,
+        netProfitLoss: event.netProfitLoss,
+        openCycleProfitLoss: event.openCycleProfitLoss,
         autoRiskProfile: event.autoRiskProfile,
         autoState: event.autoState,
         autoReason: event.autoReason,

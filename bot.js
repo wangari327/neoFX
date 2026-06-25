@@ -1773,6 +1773,10 @@ class DerivDigitBot extends EventEmitter {
     return roundMoney(Math.max(this.options.minStake, configured ?? initial ?? defaultStake));
   }
 
+  autoCycleOverallProfitTarget() {
+    return roundMoney(Math.max(this.options.minStake * 0.2, this.options.target - this.options.seed));
+  }
+
   strategyTarget() {
     return this.autoCycleModeEnabled()
       ? roundMoney(this.options.seed + this.autoCycleProfitTarget())
@@ -1780,9 +1784,7 @@ class DerivDigitBot extends EventEmitter {
   }
 
   activeTradeBalance() {
-    return this.autoCycleModeEnabled()
-      ? roundMoney(Math.max(0, this.balance - this.autoCycleBankedProfit))
-      : roundMoney(this.balance);
+    return roundMoney(this.balance);
   }
 
   effectiveGrowthBalance() {
@@ -1790,8 +1792,25 @@ class DerivDigitBot extends EventEmitter {
   }
 
   overallProgressRatio() {
+    if (this.autoCycleModeEnabled()) {
+      return clamp(this.autoCycleBankedProfit / Math.max(0.01, this.autoCycleOverallProfitTarget()), -1, 1);
+    }
     const span = Math.max(0.01, this.options.target - this.options.seed);
     return clamp((this.balance - this.options.seed) / span, -1, 1);
+  }
+
+  sessionProfitLoss() {
+    if (this.autoCycleModeEnabled()) {
+      return roundMoney(this.autoCycleBankedProfit);
+    }
+    return roundMoney(this.balance - this.options.seed);
+  }
+
+  sessionNetProfitLoss() {
+    if (this.autoCycleModeEnabled()) {
+      return roundMoney(this.autoCycleBankedProfit + this.balance - this.options.seed);
+    }
+    return roundMoney(this.balance - this.options.seed);
   }
 
   targetSizingMode() {
@@ -1854,9 +1873,12 @@ class DerivDigitBot extends EventEmitter {
     if (activeBefore < this.options.seed) return false;
 
     const cycleTradesBefore = this.autoCycleTrades();
+    const realizedCycleProfit = roundMoney(Math.max(0, activeBefore - this.options.seed));
     const completed = activeBefore >= this.strategyTarget();
     const partialLocked = reason === 'struggle_partial_profit_lock' && !completed;
-    this.autoCycleBankedProfit = roundMoney(Math.max(0, this.balance - this.options.seed));
+    if (completed || partialLocked) {
+      this.autoCycleBankedProfit = roundMoney(this.autoCycleBankedProfit + realizedCycleProfit);
+    }
     if (completed) {
       this.autoCycleCompleted += 1;
     } else if (partialLocked) {
@@ -1865,6 +1887,7 @@ class DerivDigitBot extends EventEmitter {
       this.autoCycleRecycled += 1;
     }
 
+    this.balance = this.options.seed;
     this.phase = PHASES.GROWTH;
     this.riskFloor = this.options.seed;
     this.recoveryDebt = 0;
@@ -1884,9 +1907,9 @@ class DerivDigitBot extends EventEmitter {
     this.emitAnalysis(
       'auto_cycle_reset',
       completed
-        ? `Auto-cycle banked ${Math.max(0, activeBefore - this.options.seed).toFixed(2)} profit and started a fresh cycle.`
+        ? `Auto-cycle banked ${realizedCycleProfit.toFixed(2)} profit and started a fresh independent cycle.`
         : partialLocked
-          ? `Auto-cycle struggled for ${cycleTradesBefore} trades, recovered more than half the cycle target, banked partial profit, and started fresh.`
+          ? `Auto-cycle struggled for ${cycleTradesBefore} trades, recovered more than half the cycle target, banked ${realizedCycleProfit.toFixed(2)}, and started fresh.`
           : `Auto-cycle recovered to seed after a long hard recovery. It is closing the damaged loop at break-even and starting fresh.`,
       {
         plan: { kind: 'auto_cycle_reset' },
@@ -1895,6 +1918,7 @@ class DerivDigitBot extends EventEmitter {
           reason,
           activeBefore: roundMoney(activeBefore),
           cycleTrades: cycleTradesBefore,
+          realizedCycleProfit,
           bankedProfit: this.autoCycleBankedProfit,
           cycleCompleted: this.autoCycleCompleted,
           cyclePartialLocked: this.autoCyclePartialLocked,
@@ -1903,6 +1927,9 @@ class DerivDigitBot extends EventEmitter {
       }
     );
     this.emitBalance();
+    if (this.autoCycleBankedProfit >= this.autoCycleOverallProfitTarget()) {
+      void this.stop('take_profit');
+    }
     return true;
   }
 
@@ -3093,7 +3120,11 @@ class DerivDigitBot extends EventEmitter {
   }
 
   afterTrade(plan, result) {
-    if (this.balance >= this.options.target) {
+    if (
+      this.autoCycleModeEnabled()
+        ? this.autoCycleBankedProfit >= this.autoCycleOverallProfitTarget()
+        : this.balance >= this.options.target
+    ) {
       this.stop('take_profit');
       return;
     }
@@ -3425,7 +3456,11 @@ class DerivDigitBot extends EventEmitter {
       ...this.autoTelemetry(),
       seed: this.options.seed,
       target: this.options.target,
-      profitLoss: roundMoney(this.balance - this.options.seed),
+      profitLoss: this.sessionProfitLoss(),
+      netProfitLoss: this.sessionNetProfitLoss(),
+      openCycleProfitLoss: this.autoCycleModeEnabled()
+        ? roundMoney(this.balance - this.options.seed)
+        : 0,
       totalTrades: this.totalTrades,
       wins: this.wins,
       losses: this.losses,
@@ -3895,8 +3930,10 @@ class DerivDigitBot extends EventEmitter {
       losses: this.losses,
       winRate: this.winRate(),
       startingBalance: this.options.seed,
-      finalBalance: this.balance,
-      netProfit: roundMoney(this.balance - this.options.seed),
+      finalBalance: roundMoney(this.options.seed + this.sessionNetProfitLoss()),
+      activeCycleBalance: this.autoCycleModeEnabled() ? this.balance : null,
+      realizedProfit: this.sessionProfitLoss(),
+      netProfit: this.sessionNetProfitLoss(),
       target: this.options.target,
       blindSniperMaxUses: Math.max(1, Array.isArray(this.options.blindSniperMilestones) ? this.options.blindSniperMilestones.length : 0)
     };
