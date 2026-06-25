@@ -7,7 +7,7 @@ The bot has no paper-trading simulator. It connects to Deriv and can run against
 ## What It Implements
 
 - Node.js, `ws`, `express`, `socket.io`, no frontend framework, no TypeScript.
-- Dashboard inputs for a single Deriv authorization token, optional account ID, seed, target, demo/real mode, volatility index, target sizing mode, digit strategy mode, invert signal, guide filters, strict bar filters, growth stairs, optional initial stake, profit aggression, and blind sniper settings.
+- Dashboard inputs for a single Deriv authorization token, optional account ID, seed, target, demo/real mode, volatility index, Auto-cycle settings, target sizing mode, digit strategy mode, invert signal, guide filters, strict bar filters, growth stairs, optional initial stake, profit aggression, and blind sniper settings.
 - Demo/real mode selects which account type the bot requests from Deriv. If you pin an account ID, it must match the selected mode.
 - The dashboard shows both the live Deriv account balance and the bot's session equity, so you can tell real funds from the seed-based strategy ledger.
 - The dashboard also shows live analysis status, so you can see whether the bot is warming up, waiting for a setup, or already in a trade.
@@ -22,7 +22,12 @@ The bot has no paper-trading simulator. It connects to Deriv and can run against
 - Loss-pressure stairs do the reverse: ordinary growth/profit-push losses raise a capped temporary tier, then ordinary wins cool it down or reset it before full martingale recovery takes over.
 - Compact-target mode is enabled automatically when the target gap is 25 percent of seed or less. It uses a target-gap-aware profit gate and a `profit_push` plan to press harder near the close instead of waiting for a seed-sized risky-jump gate.
 - Profit aggression is a 1-5 dashboard slider. Higher values start compact-target profit-push trades earlier, increase growth/profit pressure, and shorten risk cooldowns while still blocking snipes and martingale revenge during weak win-rate conditions.
-- Auto mode can dynamically tune the approved weapons after launch. It starts in Scout/Grind, builds profit fuel, then unlocks Pressure or Blast only when recovery debt is clear, win rate is acceptable, and enough profit sits above the protected floor.
+- Auto-cycle mode is enabled by default when Auto mode is on. It repeats small seed-sized profit cycles instead of trying to solve the whole target in one long run.
+- Auto-cycle uses the proven compact manual preset by default: Volatility 10, base Over 1 / Under 8, phased engine, loss-pressure stairs, profit aggression 4, and sniper marks at 25 and 50 if sniper is enabled.
+- Auto-cycle defaults to seed x 10 percent cycle profit and seed x 5 percent cycle stake. Example: `$10` seed targets `$11` per cycle with a `$0.50` stake floor; an overall `$5` profit goal becomes five `$1` cycles.
+- Auto-cycle banks completed cycle profit and resets the active cycle ledger back to the original seed. Banked profit is not used as hidden collateral for the next cycle.
+- If a cycle struggles below seed for a long time, Auto-cycle can cut the loop early: after 60 cycle trades, a recovery to at least 50 percent of the cycle profit target is banked and restarted; after 100 cycle trades, a recovery back to seed recycles the cycle at break-even.
+- Legacy Auto commander behavior is still available by disabling Auto-cycle. It can dynamically tune approved weapons after launch, starting in Scout/Grind and unlocking Pressure or Blast only when recovery debt is clear, win rate is acceptable, and enough profit sits above the protected floor.
 - The dashboard includes an Auto decision ticker and a compact Auto log so you can see why Auto changed symbol, strategy, sniper, stairs, or aggression.
 - Optional blind sniper overlay supports any number of comma-separated progress marks, including negative recovery marks. Each mark is one possible shot, with stake caps near the target so small-profit runs are not broken by a one-third-balance shot.
 - Volatility index selector supports `R_100` and `R_10`.
@@ -63,7 +68,17 @@ The extreme selector no longer uses the base strategy's "cooler side" rule. That
 
 ## Auto Mode
 
-Auto mode is a bounded rule-based commander, not machine learning and not unlimited revenge trading. The user still sets seed, target, and mode; Auto adjusts only approved controls inside hard caps.
+Auto mode is a bounded rule-based commander, not machine learning and not unlimited revenge trading.
+
+By default, Auto runs in Auto-cycle mode. The user sets seed and total target; Auto converts that into repeated micro-runs. For example, seed `$10`, target `$15`, and default cycle profit `$1` means the bot runs five isolated `$10 -> $11` cycles. After each completed cycle, the active ledger resets to `$10` and the profit is banked toward the overall target.
+
+Auto-cycle exits:
+
+- Full cycle win: active cycle equity reaches seed plus cycle profit.
+- Long struggle partial lock: the cycle has gone below seed, has lasted at least 60 trades, and recovers to at least 50 percent of the cycle profit target.
+- Long struggle break-even recycle: the cycle has gone below seed, has lasted at least 100 trades, and recovers to seed.
+
+The older dynamic Auto commander is still available when Auto-cycle is turned off. In that mode, the user still sets seed, target, and mode; Auto adjusts only approved controls inside hard caps.
 
 Auto can switch:
 
@@ -208,6 +223,12 @@ LOSS_STAIR_DEBT_CAP_PERCENT=0.18
 PROFIT_GATE_PERCENT=0.08
 PROFIT_AGGRESSION=2
 AUTO_MODE_ENABLED=false
+AUTO_CYCLE_MODE=true
+AUTO_CYCLE_PROFIT=
+AUTO_CYCLE_STAKE=
+AUTO_CYCLE_PARTIAL_EXIT_TRADE_THRESHOLD=60
+AUTO_CYCLE_PARTIAL_EXIT_PROFIT_RATIO=0.5
+AUTO_CYCLE_RECYCLE_TRADE_THRESHOLD=100
 AUTO_RISK_PROFILE=balanced
 AUTO_REVIEW_INTERVAL_TRADES=5
 TARGET_SIZING_MODE=phased

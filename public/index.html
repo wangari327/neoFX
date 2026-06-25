@@ -1024,6 +1024,23 @@
               <input id="autoMode" type="checkbox">
             </div>
 
+            <div class="switch-row">
+              <label for="autoCycleMode" title="Run repeated seed-sized micro cycles. Each cycle targets a small profit, banks it, then resets the cycle ledger.">Auto cycle</label>
+              <input id="autoCycleMode" type="checkbox" checked>
+            </div>
+
+            <div class="inline">
+              <div class="field">
+                <label for="autoCycleProfit">Cycle profit</label>
+                <input id="autoCycleProfit" type="number" min="0" step="0.01" placeholder="Auto">
+              </div>
+              <div class="field">
+                <label for="autoCycleStake">Cycle stake</label>
+                <input id="autoCycleStake" type="number" min="0" step="0.01" placeholder="Auto">
+              </div>
+            </div>
+            <div class="field-help">Auto-cycle defaults to seed x 10% profit and seed x 5% stake. For $10 seed, that is a $1 cycle target and $0.50 stake floor.</div>
+
             <div class="field">
               <label for="autoRiskProfile">Auto risk</label>
               <select id="autoRiskProfile">
@@ -1284,6 +1301,9 @@
       target: document.getElementById('target'),
       mode: document.getElementById('mode'),
       autoMode: document.getElementById('autoMode'),
+      autoCycleMode: document.getElementById('autoCycleMode'),
+      autoCycleProfit: document.getElementById('autoCycleProfit'),
+      autoCycleStake: document.getElementById('autoCycleStake'),
       autoRiskProfile: document.getElementById('autoRiskProfile'),
       symbol: document.getElementById('symbol'),
       targetSizingMode: document.getElementById('targetSizingMode'),
@@ -1358,11 +1378,15 @@
     let currentView = 'live';
     let currentSeed = Number(el.seed.value);
     let currentTarget = Number(el.target.value);
+    let currentProgressTarget = Number(el.target.value);
     let currentSymbol = 'R_100';
     let currentTargetSizingMode = 'phased';
     let currentDigitStrategyMode = 'base';
     let currentInvertDigitSignal = false;
     let currentAutoModeEnabled = false;
+    let currentAutoCycleMode = true;
+    let currentAutoCycleProfit = null;
+    let currentAutoCycleStake = null;
     let currentAutoRiskProfile = 'balanced';
     let currentWindowSize = 20;
     let currentMinStake = 0.35;
@@ -1484,6 +1508,14 @@
       const state = String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
       if (!state || state === 'manual') return 'manual';
       return state.replace(/_/g, ' ');
+    }
+
+    function autoCycleCompletedLabel(event = {}) {
+      const completed = Number(event.autoCycleCompleted || 0);
+      const recycled = Number(event.autoCycleRecycled || 0);
+      const banked = Number(event.autoCycleBankedProfit || 0);
+      const cycle = completed + recycled + 1;
+      return `${cycle} - banked ${money(banked)}`;
     }
 
     function autoDecisionFromEvent(event = {}) {
@@ -1698,6 +1730,9 @@
         mode: el.mode.value === 'real' ? 'real' : 'demo',
         accountId: String(el.accountId.value || '').trim(),
         autoModeEnabled: Boolean(el.autoMode.checked),
+        autoCycleMode: Boolean(el.autoCycleMode.checked),
+        autoCycleProfit: optionalInputValue(el.autoCycleProfit.value),
+        autoCycleStake: optionalInputValue(el.autoCycleStake.value),
         autoRiskProfile: normalizeAutoRiskProfile(el.autoRiskProfile.value),
         symbol: normalizeSymbol(el.symbol.value),
         targetSizingMode: normalizeTargetSizingMode(el.targetSizingMode.value),
@@ -1727,6 +1762,15 @@
       }
       if (Object.prototype.hasOwnProperty.call(values, 'autoModeEnabled')) {
         el.autoMode.checked = Boolean(values.autoModeEnabled);
+      }
+      if (Object.prototype.hasOwnProperty.call(values, 'autoCycleMode')) {
+        el.autoCycleMode.checked = Boolean(values.autoCycleMode);
+      }
+      if (Object.prototype.hasOwnProperty.call(values, 'autoCycleProfit')) {
+        el.autoCycleProfit.value = optionalInputValue(values.autoCycleProfit);
+      }
+      if (Object.prototype.hasOwnProperty.call(values, 'autoCycleStake')) {
+        el.autoCycleStake.value = optionalInputValue(values.autoCycleStake);
       }
       if (Object.prototype.hasOwnProperty.call(values, 'autoRiskProfile')) {
         el.autoRiskProfile.value = normalizeAutoRiskProfile(values.autoRiskProfile);
@@ -1782,6 +1826,12 @@
       currentSeed = roundInputNumber(el.seed.value, currentSeed);
       currentTarget = roundInputNumber(el.target.value, currentTarget);
       currentAutoModeEnabled = Boolean(el.autoMode.checked);
+      currentAutoCycleMode = Boolean(el.autoCycleMode.checked);
+      currentAutoCycleProfit = parseOptionalNumber(el.autoCycleProfit.value, null);
+      currentAutoCycleStake = parseOptionalNumber(el.autoCycleStake.value, null);
+      currentProgressTarget = currentAutoModeEnabled && currentAutoCycleMode
+        ? currentSeed + (currentAutoCycleProfit || Math.max(currentMinStake * 2, currentSeed * 0.1))
+        : currentTarget;
       currentAutoRiskProfile = normalizeAutoRiskProfile(el.autoRiskProfile.value);
       currentSymbol = normalizeSymbol(el.symbol.value);
       currentTargetSizingMode = normalizeTargetSizingMode(el.targetSizingMode.value);
@@ -1802,7 +1852,11 @@
       updateDefaultsState();
       resetEquityTrail();
       el.gateStepText.textContent = `Gate step ${money(previewGateStep(currentSeed, currentTarget, currentProfitAggression))}`;
-      el.autoText.textContent = currentAutoModeEnabled ? `Auto ${autoRiskLabel(currentAutoRiskProfile)}` : 'Auto off';
+      el.autoText.textContent = currentAutoModeEnabled
+        ? currentAutoCycleMode
+          ? `Auto cycle ${money(currentAutoCycleProfit || Math.max(currentMinStake * 2, currentSeed * 0.1))}`
+          : `Auto ${autoRiskLabel(currentAutoRiskProfile)}`
+        : 'Auto off';
       el.strategyText.textContent = `${currentSymbol} - ${targetSizingLabel(currentTargetSizingMode)} - ${digitStrategyLabel(currentDigitStrategyMode)}${currentInvertDigitSignal ? ' - inverted' : ''}`;
       el.aggressionText.textContent = `Aggression ${currentProfitAggression}/5`;
       el.growthFloorText.textContent = `Growth floor ${money(currentMinStake)}`;
@@ -1958,6 +2012,15 @@
         ? Number(event.goalGapRatio)
         : inferredGapRatio;
       const mode = String(event && event.goalMode ? event.goalMode : '').toLowerCase() || (Number.isFinite(gapRatio) && gapRatio <= 0.25 ? 'compact' : 'standard');
+      if (mode === 'auto-cycle') {
+        const cycleProfit = Number(event && event.autoCycleProfit);
+        const banked = Number(event && event.autoCycleBankedProfit);
+        const trades = Number(event && event.autoCycleTrades);
+        const profitText = Number.isFinite(cycleProfit) && cycleProfit > 0 ? ` ${money(cycleProfit)} cycle` : '';
+        const bankedText = Number.isFinite(banked) && banked > 0 ? `, banked ${money(banked)}` : '';
+        const tradeText = Number.isFinite(trades) && trades > 0 ? `, ${trades} trades` : '';
+        return `Goal mode auto${profitText}${bankedText}${tradeText}`;
+      }
       if (mode === 'bold') {
         const stake = Number(event && event.boldTargetStake);
         return Number.isFinite(stake) && stake > 0
@@ -2582,7 +2645,7 @@
       el.progressMarker.style.left = '0%';
       el.progressMarker.classList.remove('win', 'loss');
       el.progressStart.textContent = money(currentSeed);
-      el.progressTarget.textContent = money(currentTarget);
+      el.progressTarget.textContent = money(currentProgressTarget);
       el.progressText.textContent = '0.0%';
       el.gateFloorText.textContent = `Protected floor ${money(currentSeed)}`;
       el.recoveryDebtText.textContent = 'Recovery debt $0.00';
@@ -2628,8 +2691,8 @@
       ctx.clearRect(0, 0, width, height);
 
       const trail = equityHistory.length > 1 ? equityHistory.slice() : [currentSeed, lastRenderedBalance];
-      const min = Math.min(...trail, currentSeed, currentTarget);
-      const max = Math.max(...trail, currentSeed, currentTarget);
+      const min = Math.min(...trail, currentSeed, currentProgressTarget);
+      const max = Math.max(...trail, currentSeed, currentProgressTarget);
       const padding = Math.max(0.25, (max - min) * 0.12);
       const low = min - padding;
       const high = max + padding;
@@ -2647,7 +2710,7 @@
       ctx.lineWidth = 1;
       ctx.strokeStyle = 'rgba(168, 170, 162, 0.18)';
       ctx.setLineDash([4, 4]);
-      [currentSeed, currentTarget].forEach((lineValue) => {
+      [currentSeed, currentProgressTarget].forEach((lineValue) => {
         const y = toY(lineValue);
         ctx.beginPath();
         ctx.moveTo(leftPad, y);
@@ -2691,7 +2754,7 @@
       ctx.font = '11px Arial, Helvetica, sans-serif';
       ctx.fillStyle = 'rgba(243, 240, 232, 0.8)';
       ctx.fillText(money(currentSeed), 14, toY(currentSeed) - 6);
-      ctx.fillText(money(currentTarget), 14, toY(currentTarget) - 6);
+      ctx.fillText(money(currentProgressTarget), 14, toY(currentProgressTarget) - 6);
     }
 
     function appendEquity(balance, tradeDelta, growthBalance = balance) {
@@ -2707,8 +2770,8 @@
       const delta = Number.isFinite(tradeDelta)
         ? Number(tradeDelta)
         : (Number.isFinite(lastRenderedBalance) ? next - lastRenderedBalance : 0);
-      const span = Math.max(0.01, currentTarget - currentSeed);
-      const pct = ((next - currentSeed) / span) * 100;
+      const progressSpan = Math.max(0.01, currentProgressTarget - currentSeed);
+      const pct = ((next - currentSeed) / progressSpan) * 100;
       const pctClamped = Math.max(0, Math.min(100, pct));
 
       el.equityValue.textContent = money(next);
@@ -2728,7 +2791,7 @@
         : 'linear-gradient(90deg, rgba(255, 95, 87, 0.92), rgba(244, 197, 66, 0.88))';
       el.progressText.textContent = `${pct.toFixed(1)}%`;
       el.progressStart.textContent = money(currentSeed);
-      el.progressTarget.textContent = money(currentTarget);
+      el.progressTarget.textContent = money(currentProgressTarget);
       el.progressMarker.title = `Session equity ${money(next)} (${pct.toFixed(1)}%)`;
     }
 
@@ -2739,6 +2802,18 @@
       const symbol = normalizeSymbol(event.symbol ?? currentSymbol);
       const digitStrategyMode = normalizeDigitStrategyMode(event.digitStrategyMode ?? currentDigitStrategyMode);
       const autoModeEnabled = Boolean(event.autoModeEnabled ?? currentAutoModeEnabled);
+      const autoCycleMode = Boolean(event.autoCycleMode ?? currentAutoCycleMode);
+      const autoCycleProfit = Number.isFinite(Number(event.autoCycleProfit))
+        ? Number(event.autoCycleProfit)
+        : currentAutoCycleProfit;
+      const autoCycleStake = Number.isFinite(Number(event.autoCycleStake))
+        ? Number(event.autoCycleStake)
+        : currentAutoCycleStake;
+      const strategyTarget = Number.isFinite(Number(event.strategyTarget))
+        ? Number(event.strategyTarget)
+        : autoCycleMode
+          ? seed + (autoCycleProfit || Math.max(currentMinStake * 2, seed * 0.1))
+          : target;
       const autoRiskProfile = normalizeAutoRiskProfile(event.autoRiskProfile ?? currentAutoRiskProfile);
       const autoState = String(event.autoState || (autoModeEnabled ? 'scout' : 'manual'));
       const autoReason = String(event.autoReason || '');
@@ -2753,13 +2828,20 @@
       const invertDigitSignal = Boolean(event.invertDigitSignal ?? currentInvertDigitSignal);
       currentSeed = seed;
       currentTarget = target;
+      currentProgressTarget = autoCycleMode ? strategyTarget : target;
       currentAutoModeEnabled = autoModeEnabled;
+      currentAutoCycleMode = autoCycleMode;
+      currentAutoCycleProfit = autoCycleProfit;
+      currentAutoCycleStake = autoCycleStake;
       currentAutoRiskProfile = autoRiskProfile;
       currentSymbol = symbol;
       currentTargetSizingMode = targetSizingMode;
       currentDigitStrategyMode = digitStrategyMode;
       currentInvertDigitSignal = invertDigitSignal;
       el.autoMode.checked = autoModeEnabled;
+      el.autoCycleMode.checked = autoCycleMode;
+      el.autoCycleProfit.value = optionalInputValue(autoCycleProfit);
+      el.autoCycleStake.value = optionalInputValue(autoCycleStake);
       el.autoRiskProfile.value = autoRiskProfile;
       el.symbol.value = symbol;
       el.targetSizingMode.value = targetSizingMode;
@@ -2812,6 +2894,11 @@
       el.autoText.textContent = autoModeEnabled
         ? `Auto ${autoStateLabel(autoState)} · ${autoRiskLabel(autoRiskProfile)}`
         : 'Auto off';
+      el.autoText.textContent = autoModeEnabled
+        ? autoCycleMode
+          ? `Auto cycle ${autoCycleCompletedLabel(event)}`
+          : `Auto ${autoStateLabel(autoState)} - ${autoRiskLabel(autoRiskProfile)}`
+        : 'Auto off';
       el.autoText.title = autoReason;
       if (autoModeEnabled && (event.autoDecision || autoReason)) {
         pushAutoDecision({
@@ -2858,7 +2945,7 @@
         ? Number(tradeDelta)
         : (Number.isFinite(lastRenderedBalance) ? growthBalance - lastRenderedBalance : 0);
       const shouldAnimate = source === 'trade' || Math.abs(growthBalance - lastRenderedBalance) > 0.0001;
-      const growthProgress = ((growthBalance - seed) / Math.max(0.01, currentTarget - currentSeed)) * 100;
+      const growthProgress = ((growthBalance - seed) / Math.max(0.01, currentProgressTarget - currentSeed)) * 100;
       const growthProgressClamped = Math.max(0, Math.min(100, growthProgress));
 
       el.balance.textContent = maybeMoney(accountBalanceValue);
@@ -2876,7 +2963,7 @@
         el.equityDelta.classList.remove('win', 'loss', 'pulse');
         el.equityDelta.classList.add((growthBalance - lastRenderedBalance) >= 0 ? 'win' : 'loss');
         el.progressStart.textContent = money(currentSeed);
-        el.progressTarget.textContent = money(currentTarget);
+        el.progressTarget.textContent = money(currentProgressTarget);
         el.progressBar.style.width = `${growthProgressClamped}%`;
         el.progressMarker.style.left = `${growthProgressClamped}%`;
         el.progressMarker.classList.remove('win', 'loss');
@@ -2946,6 +3033,12 @@
       currentSeed = Number(el.seed.value);
       currentTarget = Number(el.target.value);
       currentAutoModeEnabled = Boolean(el.autoMode.checked);
+      currentAutoCycleMode = Boolean(el.autoCycleMode.checked);
+      currentAutoCycleProfit = parseOptionalNumber(el.autoCycleProfit.value, null);
+      currentAutoCycleStake = parseOptionalNumber(el.autoCycleStake.value, null);
+      currentProgressTarget = currentAutoModeEnabled && currentAutoCycleMode
+        ? currentSeed + (currentAutoCycleProfit || Math.max(currentMinStake * 2, currentSeed * 0.1))
+        : currentTarget;
       currentAutoRiskProfile = normalizeAutoRiskProfile(el.autoRiskProfile.value);
       currentSymbol = normalizeSymbol(el.symbol.value);
       currentTargetSizingMode = normalizeTargetSizingMode(el.targetSizingMode.value);
@@ -2971,6 +3064,9 @@
         digitStrategyMode: currentDigitStrategyMode,
         invertDigitSignal: currentInvertDigitSignal,
         autoModeEnabled: currentAutoModeEnabled,
+        autoCycleMode: currentAutoCycleMode,
+        autoCycleProfit: currentAutoCycleProfit,
+        autoCycleStake: currentAutoCycleStake,
         autoRiskProfile: currentAutoRiskProfile,
         autoState: currentAutoModeEnabled ? 'scout' : 'manual',
         autoReason: currentAutoModeEnabled ? 'Auto mode starts in Scout while it gathers early run evidence.' : '',
@@ -3012,6 +3108,9 @@
         target: currentTarget,
         mode: el.mode.value,
         autoModeEnabled: currentAutoModeEnabled,
+        autoCycleMode: currentAutoCycleMode,
+        autoCycleProfit: el.autoCycleProfit.value,
+        autoCycleStake: el.autoCycleStake.value,
         autoRiskProfile: currentAutoRiskProfile,
         symbol: currentSymbol,
         targetSizingMode: currentTargetSizingMode,
@@ -3122,6 +3221,18 @@
       syncConfigPreviewFromControls();
     });
 
+    el.autoCycleMode.addEventListener('change', () => {
+      syncConfigPreviewFromControls();
+    });
+
+    el.autoCycleProfit.addEventListener('input', () => {
+      syncConfigPreviewFromControls();
+    });
+
+    el.autoCycleStake.addEventListener('input', () => {
+      syncConfigPreviewFromControls();
+    });
+
     el.autoRiskProfile.addEventListener('change', () => {
       syncConfigPreviewFromControls();
     });
@@ -3129,12 +3240,18 @@
     socket.on('config', (config) => {
       if (config.defaultMode) el.mode.value = config.defaultMode;
       currentAutoModeEnabled = Boolean(config.autoModeEnabled ?? currentAutoModeEnabled);
+      currentAutoCycleMode = Boolean(config.autoCycleMode ?? currentAutoCycleMode);
+      currentAutoCycleProfit = parseOptionalNumber(config.autoCycleProfit, currentAutoCycleProfit);
+      currentAutoCycleStake = parseOptionalNumber(config.autoCycleStake, currentAutoCycleStake);
       currentAutoRiskProfile = normalizeAutoRiskProfile(config.autoRiskProfile || currentAutoRiskProfile);
       currentSymbol = normalizeSymbol(config.defaultSymbol || currentSymbol);
       currentTargetSizingMode = normalizeTargetSizingMode(config.targetSizingMode || currentTargetSizingMode);
       currentDigitStrategyMode = normalizeDigitStrategyMode(config.digitStrategyMode || currentDigitStrategyMode);
       currentInvertDigitSignal = Boolean(config.invertDigitSignal ?? currentInvertDigitSignal);
       el.autoMode.checked = currentAutoModeEnabled;
+      el.autoCycleMode.checked = currentAutoCycleMode;
+      el.autoCycleProfit.value = optionalInputValue(currentAutoCycleProfit);
+      el.autoCycleStake.value = optionalInputValue(currentAutoCycleStake);
       el.autoRiskProfile.value = currentAutoRiskProfile;
       el.symbol.value = currentSymbol;
       el.targetSizingMode.value = currentTargetSizingMode;
