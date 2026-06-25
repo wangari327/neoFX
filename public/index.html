@@ -926,6 +926,22 @@
               </select>
             </div>
 
+            <div class="switch-row">
+              <label for="autoMode" title="Auto Commander can adjust symbol, digit strategy, sniper, stairs, and aggression while staying inside hard risk caps.">Auto mode</label>
+              <input id="autoMode" type="checkbox">
+            </div>
+
+            <div class="field">
+              <label for="autoRiskProfile">Auto risk</label>
+              <select id="autoRiskProfile">
+                <option value="safe">Safe</option>
+                <option value="balanced">Balanced</option>
+                <option value="aggressive">Aggressive</option>
+                <option value="insane_demo">Insane demo only</option>
+              </select>
+              <div class="field-help">Auto starts safe, builds profit fuel, then unlocks pressure or blast only when the run has earned room above the protected floor.</div>
+            </div>
+
             <div class="field">
               <label for="symbol">Volatility Index</label>
               <select id="symbol">
@@ -1045,6 +1061,7 @@
             <span id="recoveryDebtText">Recovery debt $0.00</span>
             <span id="gateStepText">Gate step $0.00</span>
             <span id="goalModeText">Goal mode standard</span>
+            <span id="autoText">Auto off</span>
             <span id="strategyText">R_100 · Base Over 1 / Under 8</span>
             <span id="aggressionText">Aggression 2/5</span>
             <span id="recoveryText">Recovery split off</span>
@@ -1149,6 +1166,8 @@
       seed: document.getElementById('seed'),
       target: document.getElementById('target'),
       mode: document.getElementById('mode'),
+      autoMode: document.getElementById('autoMode'),
+      autoRiskProfile: document.getElementById('autoRiskProfile'),
       symbol: document.getElementById('symbol'),
       digitStrategyMode: document.getElementById('digitStrategyMode'),
       guideFilters: document.getElementById('guideFilters'),
@@ -1186,6 +1205,7 @@
       recoveryDebtText: document.getElementById('recoveryDebtText'),
       gateStepText: document.getElementById('gateStepText'),
       goalModeText: document.getElementById('goalModeText'),
+      autoText: document.getElementById('autoText'),
       strategyText: document.getElementById('strategyText'),
       aggressionText: document.getElementById('aggressionText'),
       recoveryText: document.getElementById('recoveryText'),
@@ -1216,6 +1236,8 @@
     let currentTarget = Number(el.target.value);
     let currentSymbol = 'R_100';
     let currentDigitStrategyMode = 'base';
+    let currentAutoModeEnabled = false;
+    let currentAutoRiskProfile = 'balanced';
     let currentWindowSize = 20;
     let currentMinStake = 0.35;
     let currentProfitGatePercent = 0.08;
@@ -1292,6 +1314,14 @@
       return 'base';
     }
 
+    function normalizeAutoRiskProfile(value) {
+      const normalized = String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+      if (['safe', 'conservative', 'low'].includes(normalized)) return 'safe';
+      if (['aggressive', 'high'].includes(normalized)) return 'aggressive';
+      if (['insane', 'insane_demo', 'demo_insane', 'max'].includes(normalized)) return 'insane_demo';
+      return 'balanced';
+    }
+
     function growthStairLabel(value) {
       const mode = normalizeGrowthStairMode(value);
       if (mode === 'loss_pressure') return 'Loss-pressure stairs';
@@ -1304,6 +1334,20 @@
       if (mode === 'extreme_over_under') return 'High risk Over 7 / Under 2';
       if (mode === 'match_sniper') return 'Blast Match Sniper';
       return 'Base Over 1 / Under 8';
+    }
+
+    function autoRiskLabel(value) {
+      const profile = normalizeAutoRiskProfile(value);
+      if (profile === 'safe') return 'safe';
+      if (profile === 'aggressive') return 'aggressive';
+      if (profile === 'insane_demo') return 'insane demo';
+      return 'balanced';
+    }
+
+    function autoStateLabel(value) {
+      const state = String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+      if (!state || state === 'manual') return 'manual';
+      return state.replace(/_/g, ' ');
     }
 
     function previewGateStep(seed, target, aggression = currentProfitAggression) {
@@ -1437,6 +1481,8 @@
       return {
         mode: el.mode.value === 'real' ? 'real' : 'demo',
         accountId: String(el.accountId.value || '').trim(),
+        autoModeEnabled: Boolean(el.autoMode.checked),
+        autoRiskProfile: normalizeAutoRiskProfile(el.autoRiskProfile.value),
         symbol: normalizeSymbol(el.symbol.value),
         digitStrategyMode: normalizeDigitStrategyMode(el.digitStrategyMode.value),
         seed,
@@ -1460,6 +1506,12 @@
       }
       if (Object.prototype.hasOwnProperty.call(values, 'accountId')) {
         el.accountId.value = String(values.accountId || '');
+      }
+      if (Object.prototype.hasOwnProperty.call(values, 'autoModeEnabled')) {
+        el.autoMode.checked = Boolean(values.autoModeEnabled);
+      }
+      if (Object.prototype.hasOwnProperty.call(values, 'autoRiskProfile')) {
+        el.autoRiskProfile.value = normalizeAutoRiskProfile(values.autoRiskProfile);
       }
       if (Object.prototype.hasOwnProperty.call(values, 'symbol')) {
         el.symbol.value = normalizeSymbol(values.symbol);
@@ -1505,6 +1557,8 @@
     function syncConfigPreviewFromControls() {
       currentSeed = roundInputNumber(el.seed.value, currentSeed);
       currentTarget = roundInputNumber(el.target.value, currentTarget);
+      currentAutoModeEnabled = Boolean(el.autoMode.checked);
+      currentAutoRiskProfile = normalizeAutoRiskProfile(el.autoRiskProfile.value);
       currentSymbol = normalizeSymbol(el.symbol.value);
       currentDigitStrategyMode = normalizeDigitStrategyMode(el.digitStrategyMode.value);
       currentGrowthStairMode = normalizeGrowthStairMode(el.growthStairMode.value);
@@ -1522,6 +1576,7 @@
       updateDefaultsState();
       resetEquityTrail();
       el.gateStepText.textContent = `Gate step ${money(previewGateStep(currentSeed, currentTarget, currentProfitAggression))}`;
+      el.autoText.textContent = currentAutoModeEnabled ? `Auto ${autoRiskLabel(currentAutoRiskProfile)}` : 'Auto off';
       el.strategyText.textContent = `${currentSymbol} · ${digitStrategyLabel(currentDigitStrategyMode)}`;
       el.aggressionText.textContent = `Aggression ${currentProfitAggression}/5`;
       el.growthFloorText.textContent = `Growth floor ${money(currentMinStake)}`;
@@ -1703,6 +1758,16 @@
       const windowSize = Number(event && event.windowSize ? event.windowSize : currentWindowSize);
       if (Number.isFinite(windowSize) && windowSize > 0) {
         currentWindowSize = windowSize;
+      }
+      if (event && Object.prototype.hasOwnProperty.call(event, 'autoModeEnabled')) {
+        currentAutoModeEnabled = Boolean(event.autoModeEnabled);
+        currentAutoRiskProfile = normalizeAutoRiskProfile(event.autoRiskProfile || currentAutoRiskProfile);
+        el.autoMode.checked = currentAutoModeEnabled;
+        el.autoRiskProfile.value = currentAutoRiskProfile;
+        el.autoText.textContent = currentAutoModeEnabled
+          ? `Auto ${autoStateLabel(event.autoState)} · ${autoRiskLabel(currentAutoRiskProfile)}`
+          : 'Auto off';
+        el.autoText.title = String(event.autoReason || '');
       }
 
       let text = event && event.detail ? event.detail : 'Analyzing live ticks...';
@@ -1948,6 +2013,11 @@
       const phase = String(snapshot.phase || run.phase || 'growth');
       const symbol = normalizeSymbol(snapshot.symbol ?? run.symbol ?? config.symbol ?? currentSymbol);
       const digitStrategyMode = normalizeDigitStrategyMode(snapshot.digitStrategyMode ?? run.digitStrategyMode ?? config.digitStrategyMode ?? currentDigitStrategyMode);
+      const autoModeEnabled = Boolean(snapshot.autoModeEnabled ?? run.autoModeEnabled ?? config.autoModeEnabled ?? currentAutoModeEnabled);
+      const autoRiskProfile = normalizeAutoRiskProfile(snapshot.autoRiskProfile ?? run.autoRiskProfile ?? config.autoRiskProfile ?? currentAutoRiskProfile);
+      const autoState = snapshot.autoState ?? run.autoState ?? null;
+      const autoReason = snapshot.autoReason ?? run.autoReason ?? '';
+      const autoDecision = snapshot.autoDecision ?? run.autoDecision ?? null;
       const growthStairMode = normalizeGrowthStairMode(
         snapshot.growthStairMode ?? run.growthStairMode ?? config.growthStairMode,
         Boolean(snapshot.growthStairsEnabled ?? run.growthStairsEnabled ?? config.growthStairsEnabled ?? false)
@@ -2035,6 +2105,8 @@
       currentProfitAggression = profitAggression;
       currentSymbol = symbol;
       currentDigitStrategyMode = digitStrategyMode;
+      currentAutoModeEnabled = autoModeEnabled;
+      currentAutoRiskProfile = autoRiskProfile;
 
       currentSeed = seed;
       currentTarget = target;
@@ -2042,6 +2114,8 @@
       el.target.value = target;
       if (run.mode) el.mode.value = run.mode;
       if (run.accountId) el.accountId.value = run.accountId;
+      el.autoMode.checked = autoModeEnabled;
+      el.autoRiskProfile.value = autoRiskProfile;
       el.symbol.value = symbol;
       el.digitStrategyMode.value = digitStrategyMode;
       el.growthStairMode.value = growthStairMode;
@@ -2057,6 +2131,11 @@
         phase: snapshot.phase || run.phase || 'growth',
         symbol,
         digitStrategyMode,
+        autoModeEnabled,
+        autoRiskProfile,
+        autoState,
+        autoReason,
+        autoDecision,
         seed,
         target,
         totalTrades,
@@ -2142,6 +2221,8 @@
       if (run.accountId) el.accountId.value = run.accountId;
       const symbol = normalizeSymbol(snapshot.symbol ?? run.symbol ?? run.config?.symbol ?? currentSymbol);
       const digitStrategyMode = normalizeDigitStrategyMode(snapshot.digitStrategyMode ?? run.digitStrategyMode ?? run.config?.digitStrategyMode ?? currentDigitStrategyMode);
+      const autoModeEnabled = Boolean(snapshot.autoModeEnabled ?? run.autoModeEnabled ?? run.config?.autoModeEnabled ?? currentAutoModeEnabled);
+      const autoRiskProfile = normalizeAutoRiskProfile(snapshot.autoRiskProfile ?? run.autoRiskProfile ?? run.config?.autoRiskProfile ?? currentAutoRiskProfile);
       const growthStairMode = normalizeGrowthStairMode(
         snapshot.growthStairMode ?? run.growthStairMode ?? run.config?.growthStairMode,
         Boolean(snapshot.growthStairsEnabled ?? run.growthStairsEnabled ?? run.config?.growthStairsEnabled ?? false)
@@ -2156,8 +2237,12 @@
       currentProfitAggression = profitAggression;
       currentSymbol = symbol;
       currentDigitStrategyMode = digitStrategyMode;
+      currentAutoModeEnabled = autoModeEnabled;
+      currentAutoRiskProfile = autoRiskProfile;
       currentGrowthStairMode = growthStairMode;
       currentGrowthStairsEnabled = growthStairsEnabled;
+      el.autoMode.checked = autoModeEnabled;
+      el.autoRiskProfile.value = autoRiskProfile;
       el.symbol.value = symbol;
       el.digitStrategyMode.value = digitStrategyMode;
       el.growthStairMode.value = growthStairMode;
@@ -2404,6 +2489,10 @@
       const target = Number(event.target || currentTarget);
       const symbol = normalizeSymbol(event.symbol ?? currentSymbol);
       const digitStrategyMode = normalizeDigitStrategyMode(event.digitStrategyMode ?? currentDigitStrategyMode);
+      const autoModeEnabled = Boolean(event.autoModeEnabled ?? currentAutoModeEnabled);
+      const autoRiskProfile = normalizeAutoRiskProfile(event.autoRiskProfile ?? currentAutoRiskProfile);
+      const autoState = String(event.autoState || (autoModeEnabled ? 'scout' : 'manual'));
+      const autoReason = String(event.autoReason || '');
       const estimatedWinProfitRatio = Number(event.estimatedWinProfitRatio || event.lastProposalProfitRatio || 0);
       const accountBalanceValue = Number.isFinite(Number(event.accountBalance))
         ? Number(event.accountBalance)
@@ -2413,8 +2502,12 @@
         : balance;
       currentSeed = seed;
       currentTarget = target;
+      currentAutoModeEnabled = autoModeEnabled;
+      currentAutoRiskProfile = autoRiskProfile;
       currentSymbol = symbol;
       currentDigitStrategyMode = digitStrategyMode;
+      el.autoMode.checked = autoModeEnabled;
+      el.autoRiskProfile.value = autoRiskProfile;
       el.symbol.value = symbol;
       el.digitStrategyMode.value = digitStrategyMode;
       const gateFloor = Number(event.riskFloor || seed);
@@ -2461,6 +2554,10 @@
       const paceText = tradePaceLabel(event);
       const sniperText = sniperStatusLabel(event);
       el.goalModeText.textContent = goalModeText;
+      el.autoText.textContent = autoModeEnabled
+        ? `Auto ${autoStateLabel(autoState)} · ${autoRiskLabel(autoRiskProfile)}`
+        : 'Auto off';
+      el.autoText.title = autoReason;
       el.strategyText.textContent = estimatedWinProfitRatio > 0
         ? `${symbol} · ${digitStrategyLabel(digitStrategyMode)} · payout +${(estimatedWinProfitRatio * 100).toFixed(0)}%`
         : `${symbol} · ${digitStrategyLabel(digitStrategyMode)}`;
@@ -2584,6 +2681,8 @@
       viewRows = [];
       currentSeed = Number(el.seed.value);
       currentTarget = Number(el.target.value);
+      currentAutoModeEnabled = Boolean(el.autoMode.checked);
+      currentAutoRiskProfile = normalizeAutoRiskProfile(el.autoRiskProfile.value);
       currentSymbol = normalizeSymbol(el.symbol.value);
       currentDigitStrategyMode = normalizeDigitStrategyMode(el.digitStrategyMode.value);
       currentProfitAggression = clampNumber(el.profitAggression.value, 1, 5);
@@ -2600,6 +2699,10 @@
         phase: 'growth',
         symbol: currentSymbol,
         digitStrategyMode: currentDigitStrategyMode,
+        autoModeEnabled: currentAutoModeEnabled,
+        autoRiskProfile: currentAutoRiskProfile,
+        autoState: currentAutoModeEnabled ? 'scout' : 'manual',
+        autoReason: currentAutoModeEnabled ? 'Auto mode starts in Scout while it gathers early run evidence.' : '',
         totalTrades: 0,
         winRate: 0,
         growthStairMode: currentGrowthStairMode,
@@ -2637,6 +2740,8 @@
         seed: currentSeed,
         target: currentTarget,
         mode: el.mode.value,
+        autoModeEnabled: currentAutoModeEnabled,
+        autoRiskProfile: currentAutoRiskProfile,
         symbol: currentSymbol,
         digitStrategyMode: currentDigitStrategyMode,
         guideFilters: el.guideFilters.checked,
@@ -2732,10 +2837,22 @@
       syncConfigPreviewFromControls();
     });
 
+    el.autoMode.addEventListener('change', () => {
+      syncConfigPreviewFromControls();
+    });
+
+    el.autoRiskProfile.addEventListener('change', () => {
+      syncConfigPreviewFromControls();
+    });
+
     socket.on('config', (config) => {
       if (config.defaultMode) el.mode.value = config.defaultMode;
+      currentAutoModeEnabled = Boolean(config.autoModeEnabled ?? currentAutoModeEnabled);
+      currentAutoRiskProfile = normalizeAutoRiskProfile(config.autoRiskProfile || currentAutoRiskProfile);
       currentSymbol = normalizeSymbol(config.defaultSymbol || currentSymbol);
       currentDigitStrategyMode = normalizeDigitStrategyMode(config.digitStrategyMode || currentDigitStrategyMode);
+      el.autoMode.checked = currentAutoModeEnabled;
+      el.autoRiskProfile.value = currentAutoRiskProfile;
       el.symbol.value = currentSymbol;
       el.digitStrategyMode.value = currentDigitStrategyMode;
       if (Number.isFinite(Number(config.windowSize))) {

@@ -134,6 +134,21 @@
       "value": "2",
       "required": false
     },
+    "AUTO_MODE_ENABLED": {
+      "description": "Enable Auto Commander by default. It dynamically switches approved modes based on progress, profit fuel, debt, and win rate.",
+      "value": "false",
+      "required": false
+    },
+    "AUTO_RISK_PROFILE": {
+      "description": "Auto risk profile: safe, balanced, aggressive, or insane_demo.",
+      "value": "balanced",
+      "required": false
+    },
+    "AUTO_REVIEW_INTERVAL_TRADES": {
+      "description": "Completed trades between Auto Commander review logs.",
+      "value": "5",
+      "required": false
+    },
     "DIGIT_STRATEGY_MODE": {
       "description": "Digit entry mode: base, extreme_over_under, or match_sniper.",
       "value": "base",

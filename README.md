@@ -22,6 +22,7 @@ The bot has no paper-trading simulator. It connects to Deriv and can run against
 - Loss-pressure stairs do the reverse: ordinary growth/profit-push losses raise a capped temporary tier, then ordinary wins cool it down or reset it before full martingale recovery takes over.
 - Compact-target mode is enabled automatically when the target gap is 25 percent of seed or less. It uses a target-gap-aware profit gate and a `profit_push` plan to press harder near the close instead of waiting for a seed-sized risky-jump gate.
 - Profit aggression is a 1-5 dashboard slider. Higher values start compact-target profit-push trades earlier, increase growth/profit pressure, and shorten risk cooldowns while still blocking snipes and martingale revenge during weak win-rate conditions.
+- Auto mode can dynamically tune the approved weapons after launch. It starts in Scout/Grind, builds profit fuel, then unlocks Pressure or Blast only when recovery debt is clear, win rate is acceptable, and enough profit sits above the protected floor.
 - Optional blind sniper overlay supports any number of comma-separated progress marks, including negative recovery marks. Each mark is one possible shot, with stake caps near the target so small-profit runs are not broken by a one-third-balance shot.
 - Volatility index selector supports `R_100` and `R_10`.
 - Digit strategy selector supports the base Over 1 / Under 8 loop plus high-payout experimental modes.
@@ -39,7 +40,7 @@ The bot has no paper-trading simulator. It connects to Deriv and can run against
 These modes are selectable in the dashboard. Higher payout does not mean a positive edge by itself; it usually means a lower natural hit rate. Keep new combinations on demo until the logs prove they behave.
 
 - Base Over 1 / Under 8: original strategy. It chooses the cooler side from the recent 20-digit window, then trades `DIGITOVER 1` or `DIGITUNDER 8`.
-- High risk Over 7 / Under 2: waits around the edge digits and trades the low-hit-rate, high-payout sides. A live $1, 1-tick proposal sample on June 25, 2026 paid about +365 percent on `R_10` and +355 percent on `R_100`.
+- High risk Over 7 / Under 2: trades the low-hit-rate, high-payout sides only when the recent window shows enough winning-side heat. For Over 7 this means 8/9 must be active; for Under 2 this means 0/1 must be active. A live $1, 1-tick proposal sample on June 25, 2026 paid about +365 percent on `R_10` and +355 percent on `R_100`.
 - Digit Match Sniper: targets the coldest digit in the recent window with `DIGITMATCH`. The same sample paid about +770 percent on `R_10` and +733 percent on `R_100`, but the natural hit rate is much lower.
 
 Live proposal comparison from the same sample:
@@ -49,6 +50,34 @@ Live proposal comparison from the same sample:
 - Digit Match: `R_10` paid about +770 percent; `R_100` paid about +733 percent.
 
 That makes `R_10` the better payout selector in the current sample, but the bot still treats both as selectable because market availability, timing, and actual tick behavior matter more than a one-time quote.
+
+The extreme selector no longer uses the base strategy's "cooler side" rule. That rule is useful for avoiding crowded losing digits on the 80-percent style base contracts, but it is backwards for Over 7 / Under 2. Extreme mode now estimates the contract break-even hit rate from payout, then requires the winning side to be hot enough in the 20-digit, 10-digit, and 5-digit windows before it will enter.
+
+## Auto Mode
+
+Auto mode is a bounded rule-based commander, not machine learning and not unlimited revenge trading. The user still sets seed, target, and mode; Auto adjusts only approved controls inside hard caps.
+
+Auto can switch:
+
+- Volatility symbol: usually favors `R_10` because the current comparable digit payout is slightly richer.
+- Digit strategy: base, high-risk Over 7 / Under 2, or Digit Match Sniper.
+- Profit aggression.
+- Growth stairs mode.
+- Blind sniper availability.
+- Guide/strict filters.
+- Match-sniper cooldown and cold-count tolerance.
+
+Auto states:
+
+- Scout: gather early evidence and keep risk low.
+- Grind: use the base strategy to build profit fuel.
+- Pressure: spend earned profit fuel on high-risk Over 7 / Under 2.
+- Blast: demo/aggressive-only state that can use Digit Match Sniper.
+- Recovery: lock high-risk weapons while recovery debt is open.
+- Defense: lock high-risk weapons when win rate, drawdown, or loss streak is weak.
+- Finish: protect the run near target and avoid late oversized shots.
+
+Profit fuel is the key rule. Auto only unlocks high-risk/high-reward modes when session equity is above both the seed and the protected floor by enough margin for the selected risk profile.
 
 ## Phase Logic
 
@@ -167,6 +196,9 @@ LOSS_STAIR_WIN_RESET_COUNT=2
 LOSS_STAIR_DEBT_CAP_PERCENT=0.18
 PROFIT_GATE_PERCENT=0.08
 PROFIT_AGGRESSION=2
+AUTO_MODE_ENABLED=false
+AUTO_RISK_PROFILE=balanced
+AUTO_REVIEW_INTERVAL_TRADES=5
 DIGIT_STRATEGY_MODE=base
 MATCH_SNIPER_COOLDOWN_TRADES=3
 MATCH_SNIPER_MAX_COUNT=1

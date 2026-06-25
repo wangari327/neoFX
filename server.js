@@ -26,6 +26,12 @@ const DIGIT_STRATEGY_MODES = {
   EXTREME: 'extreme_over_under',
   MATCH_SNIPER: 'match_sniper'
 };
+const AUTO_RISK_PROFILES = {
+  SAFE: 'safe',
+  BALANCED: 'balanced',
+  AGGRESSIVE: 'aggressive',
+  INSANE_DEMO: 'insane_demo'
+};
 
 function configuredMongoUrl() {
   return String(process.env.MONGODB_URL || process.env.MONGO_URL || '').trim();
@@ -93,6 +99,14 @@ function normalizeDigitStrategyMode(value) {
     return DIGIT_STRATEGY_MODES.MATCH_SNIPER;
   }
   return DIGIT_STRATEGY_MODES.BASE;
+}
+
+function normalizeAutoRiskProfile(value) {
+  const normalized = String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (['safe', 'conservative', 'low'].includes(normalized)) return AUTO_RISK_PROFILES.SAFE;
+  if (['aggressive', 'high'].includes(normalized)) return AUTO_RISK_PROFILES.AGGRESSIVE;
+  if (['insane', 'insane_demo', 'demo_insane', 'max', 'degen'].includes(normalized)) return AUTO_RISK_PROFILES.INSANE_DEMO;
+  return AUTO_RISK_PROFILES.BALANCED;
 }
 
 function normalizeSymbol(value, fallback = 'R_100') {
@@ -191,6 +205,9 @@ function publicConfig() {
     defaultMode: process.env.DEFAULT_MODE || 'demo',
     defaultSymbol: normalizeSymbol(process.env.SYMBOL, 'R_100'),
     digitStrategyMode: normalizeDigitStrategyMode(process.env.DIGIT_STRATEGY_MODE),
+    autoModeEnabled: boolFrom(process.env.AUTO_MODE_ENABLED, false),
+    autoRiskProfile: normalizeAutoRiskProfile(process.env.AUTO_RISK_PROFILE),
+    autoReviewIntervalTrades: numberFrom(process.env.AUTO_REVIEW_INTERVAL_TRADES, 5),
     matchSniperCooldownTrades: numberFrom(process.env.MATCH_SNIPER_COOLDOWN_TRADES, 3),
     matchSniperMaxCount: numberFrom(process.env.MATCH_SNIPER_MAX_COUNT, 1),
     minStake: numberFrom(process.env.MIN_STAKE, 0.35),
@@ -298,6 +315,9 @@ function sanitizeStartPayload(payload = {}) {
     lossStairDebtCapPercent: numberFrom(payload.lossStairDebtCapPercent, numberFrom(process.env.LOSS_STAIR_DEBT_CAP_PERCENT, 0.18)),
     profitGatePercent: numberFrom(process.env.PROFIT_GATE_PERCENT, 0.08),
     profitAggression: clamp(numberFrom(payload.profitAggression, numberFrom(process.env.PROFIT_AGGRESSION, 2)), 1, 5),
+    autoModeEnabled: boolFrom(payload.autoModeEnabled, boolFrom(process.env.AUTO_MODE_ENABLED, false)),
+    autoRiskProfile: normalizeAutoRiskProfile(payload.autoRiskProfile ?? process.env.AUTO_RISK_PROFILE),
+    autoReviewIntervalTrades: numberFrom(payload.autoReviewIntervalTrades, numberFrom(process.env.AUTO_REVIEW_INTERVAL_TRADES, 5)),
     digitStrategyMode: normalizeDigitStrategyMode(payload.digitStrategyMode ?? process.env.DIGIT_STRATEGY_MODE),
     matchSniperCooldownTrades: numberFrom(payload.matchSniperCooldownTrades, numberFrom(process.env.MATCH_SNIPER_COOLDOWN_TRADES, 3)),
     matchSniperMaxCount: numberFrom(payload.matchSniperMaxCount, numberFrom(process.env.MATCH_SNIPER_MAX_COUNT, 1)),
@@ -337,6 +357,14 @@ function summarizeRun(run, reason = run?.reason || 'manual') {
     accountKind: snapshot.accountKind || run.accountKind || null,
     symbol: normalizeSymbol(snapshot.symbol ?? run.symbol ?? run.config?.symbol, 'R_100'),
     digitStrategyMode: normalizeDigitStrategyMode(snapshot.digitStrategyMode ?? run.digitStrategyMode ?? run.config?.digitStrategyMode),
+    autoModeEnabled: Boolean(snapshot.autoModeEnabled ?? run.autoModeEnabled ?? run.config?.autoModeEnabled ?? false),
+    autoRiskProfile: normalizeAutoRiskProfile(snapshot.autoRiskProfile ?? run.autoRiskProfile ?? run.config?.autoRiskProfile),
+    autoState: snapshot.autoState ?? run.autoState ?? null,
+    autoReason: snapshot.autoReason ?? run.autoReason ?? '',
+    autoDecision: snapshot.autoDecision ?? run.autoDecision ?? null,
+    autoReviewIntervalTrades: Number(snapshot.autoReviewIntervalTrades ?? run.autoReviewIntervalTrades ?? run.config?.autoReviewIntervalTrades ?? 5),
+    autoLastReviewTrade: Number(snapshot.autoLastReviewTrade ?? run.autoLastReviewTrade ?? -1),
+    recentResults: Array.isArray(snapshot.recentResults) ? snapshot.recentResults.slice(-20) : [],
     matchSniperCooldownUntilTrade: Number(snapshot.matchSniperCooldownUntilTrade ?? run.matchSniperCooldownUntilTrade ?? 0),
     matchSniperCooldownTrades: Number(snapshot.matchSniperCooldownTrades ?? run.matchSniperCooldownTrades ?? run.config?.matchSniperCooldownTrades ?? 3),
     matchSniperMaxCount: Number(snapshot.matchSniperMaxCount ?? run.matchSniperMaxCount ?? run.config?.matchSniperMaxCount ?? 1),
@@ -429,6 +457,14 @@ function buildRunPatch(bot, runDoc, extra = {}) {
     accountKind: snapshot ? snapshot.accountKind : runDoc?.accountKind ?? null,
     symbol: normalizeSymbol(snapshot?.symbol ?? runDoc?.symbol ?? runDoc?.config?.symbol, 'R_100'),
     digitStrategyMode: normalizeDigitStrategyMode(snapshot?.digitStrategyMode ?? runDoc?.digitStrategyMode ?? runDoc?.config?.digitStrategyMode),
+    autoModeEnabled: Boolean(snapshot?.autoModeEnabled ?? runDoc?.autoModeEnabled ?? runDoc?.config?.autoModeEnabled ?? false),
+    autoRiskProfile: normalizeAutoRiskProfile(snapshot?.autoRiskProfile ?? runDoc?.autoRiskProfile ?? runDoc?.config?.autoRiskProfile),
+    autoState: snapshot?.autoState ?? runDoc?.autoState ?? null,
+    autoReason: snapshot?.autoReason ?? runDoc?.autoReason ?? '',
+    autoDecision: snapshot?.autoDecision ?? runDoc?.autoDecision ?? null,
+    autoReviewIntervalTrades: Number(snapshot?.autoReviewIntervalTrades ?? runDoc?.autoReviewIntervalTrades ?? runDoc?.config?.autoReviewIntervalTrades ?? 5),
+    autoLastReviewTrade: Number(snapshot?.autoLastReviewTrade ?? runDoc?.autoLastReviewTrade ?? -1),
+    recentResults: Array.isArray(snapshot?.recentResults) ? snapshot.recentResults.slice(-20) : [],
     matchSniperCooldownUntilTrade: Number(snapshot?.matchSniperCooldownUntilTrade ?? runDoc?.matchSniperCooldownUntilTrade ?? 0),
     matchSniperCooldownTrades: Number(snapshot?.matchSniperCooldownTrades ?? runDoc?.matchSniperCooldownTrades ?? runDoc?.config?.matchSniperCooldownTrades ?? 3),
     matchSniperMaxCount: Number(snapshot?.matchSniperMaxCount ?? runDoc?.matchSniperMaxCount ?? runDoc?.config?.matchSniperMaxCount ?? 1),
@@ -579,6 +615,14 @@ function runBalanceState(run) {
     phase,
     symbol: normalizeSymbol(snapshot.symbol ?? run.symbol ?? run.config?.symbol, 'R_100'),
     digitStrategyMode: normalizeDigitStrategyMode(snapshot.digitStrategyMode ?? run.digitStrategyMode ?? run.config?.digitStrategyMode),
+    autoModeEnabled: Boolean(snapshot.autoModeEnabled ?? run.autoModeEnabled ?? run.config?.autoModeEnabled ?? false),
+    autoRiskProfile: normalizeAutoRiskProfile(snapshot.autoRiskProfile ?? run.autoRiskProfile ?? run.config?.autoRiskProfile),
+    autoState: snapshot.autoState ?? run.autoState ?? null,
+    autoReason: snapshot.autoReason ?? run.autoReason ?? '',
+    autoDecision: snapshot.autoDecision ?? run.autoDecision ?? null,
+    autoReviewIntervalTrades: Number(snapshot.autoReviewIntervalTrades ?? run.autoReviewIntervalTrades ?? run.config?.autoReviewIntervalTrades ?? 5),
+    autoLastReviewTrade: Number(snapshot.autoLastReviewTrade ?? run.autoLastReviewTrade ?? -1),
+    recentResults: Array.isArray(snapshot.recentResults) ? snapshot.recentResults.slice(-20) : [],
     matchSniperCooldownUntilTrade: Number(snapshot.matchSniperCooldownUntilTrade ?? run.matchSniperCooldownUntilTrade ?? 0),
     matchSniperCooldownTrades: Number(snapshot.matchSniperCooldownTrades ?? run.matchSniperCooldownTrades ?? run.config?.matchSniperCooldownTrades ?? 3),
     matchSniperMaxCount: Number(snapshot.matchSniperMaxCount ?? run.matchSniperMaxCount ?? run.config?.matchSniperMaxCount ?? 1),
@@ -804,6 +848,14 @@ function bindBot(bot) {
         phase: event.phase,
         symbol: event.symbol,
         digitStrategyMode: event.digitStrategyMode,
+        autoModeEnabled: event.autoModeEnabled,
+        autoRiskProfile: event.autoRiskProfile,
+        autoState: event.autoState,
+        autoReason: event.autoReason,
+        autoDecision: event.autoDecision,
+        autoReviewIntervalTrades: event.autoReviewIntervalTrades,
+        autoLastReviewTrade: event.autoLastReviewTrade,
+        recentResults: event.recentResults,
         matchSniperCooldownUntilTrade: event.matchSniperCooldownUntilTrade,
         matchSniperCooldownTrades: event.matchSniperCooldownTrades,
         matchSniperMaxCount: event.matchSniperMaxCount,
@@ -920,6 +972,14 @@ async function startFreshRun(payload = {}) {
     mode: config.mode,
     symbol: config.symbol,
     digitStrategyMode: config.digitStrategyMode,
+    autoModeEnabled: initialSnapshot.autoModeEnabled,
+    autoRiskProfile: initialSnapshot.autoRiskProfile,
+    autoState: initialSnapshot.autoState,
+    autoReason: initialSnapshot.autoReason,
+    autoDecision: initialSnapshot.autoDecision,
+    autoReviewIntervalTrades: initialSnapshot.autoReviewIntervalTrades,
+    autoLastReviewTrade: initialSnapshot.autoLastReviewTrade,
+    recentResults: initialSnapshot.recentResults,
     matchSniperCooldownUntilTrade: initialSnapshot.matchSniperCooldownUntilTrade,
     matchSniperCooldownTrades: initialSnapshot.matchSniperCooldownTrades,
     matchSniperMaxCount: initialSnapshot.matchSniperMaxCount,

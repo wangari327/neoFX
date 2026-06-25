@@ -28,6 +28,24 @@ const DIGIT_STRATEGY_MODES = {
   MATCH_SNIPER: 'match_sniper'
 };
 
+const AUTO_RISK_PROFILES = {
+  SAFE: 'safe',
+  BALANCED: 'balanced',
+  AGGRESSIVE: 'aggressive',
+  INSANE_DEMO: 'insane_demo'
+};
+
+const AUTO_STATES = {
+  MANUAL: 'manual',
+  SCOUT: 'scout',
+  GRIND: 'grind',
+  PRESSURE: 'pressure',
+  BLAST: 'blast',
+  RECOVERY: 'recovery',
+  DEFENSE: 'defense',
+  FINISH: 'finish'
+};
+
 const PHASES = {
   GROWTH: 'growth',
   RISKY: 'risky_jump',
@@ -95,6 +113,14 @@ function normalizeDigitStrategyMode(value) {
     return DIGIT_STRATEGY_MODES.MATCH_SNIPER;
   }
   return DIGIT_STRATEGY_MODES.BASE;
+}
+
+function normalizeAutoRiskProfile(value) {
+  const normalized = String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (['safe', 'conservative', 'low'].includes(normalized)) return AUTO_RISK_PROFILES.SAFE;
+  if (['aggressive', 'high'].includes(normalized)) return AUTO_RISK_PROFILES.AGGRESSIVE;
+  if (['insane', 'insane_demo', 'demo_insane', 'max', 'degen'].includes(normalized)) return AUTO_RISK_PROFILES.INSANE_DEMO;
+  return AUTO_RISK_PROFILES.BALANCED;
 }
 
 function normalizeSymbol(value, fallback = 'R_100') {
@@ -285,6 +311,9 @@ class DerivDigitBot extends EventEmitter {
       lossStairDebtCapPercent: clamp(toNumber(options.lossStairDebtCapPercent, 0.18), 0.02, 1),
       profitGatePercent: toNumber(options.profitGatePercent, 0.08),
       profitAggression: clamp(toNumber(options.profitAggression, PROFIT_AGGRESSION_DEFAULT), 1, 5),
+      autoModeEnabled: options.autoModeEnabled === true,
+      autoRiskProfile: normalizeAutoRiskProfile(options.autoRiskProfile),
+      autoReviewIntervalTrades: Math.max(1, Math.floor(toNumber(options.autoReviewIntervalTrades, 5))),
       digitStrategyMode: normalizeDigitStrategyMode(options.digitStrategyMode ?? options.highRiskDigitMode),
       matchSniperCooldownTrades: Math.max(1, Math.floor(toNumber(options.matchSniperCooldownTrades, 3))),
       matchSniperMaxCount: Math.max(0, Math.floor(toNumber(options.matchSniperMaxCount, 1))),
@@ -319,6 +348,23 @@ class DerivDigitBot extends EventEmitter {
     this.lastWinProfitRatio = DEFAULT_DIGIT_WIN_PROFIT_RATIO;
     this.lastProposalProfitRatio = this.strategyFallbackProfitRatio();
     this.lastPipSize = 2;
+    this.autoState = this.options.autoModeEnabled ? AUTO_STATES.SCOUT : AUTO_STATES.MANUAL;
+    this.autoReason = this.options.autoModeEnabled ? 'Auto mode starts in Scout while it gathers early run evidence.' : '';
+    this.autoLastReviewTrade = -1;
+    this.autoLastDecision = null;
+    this.autoBaseConfig = {
+      symbol: this.options.symbol,
+      digitStrategyMode: this.options.digitStrategyMode,
+      profitAggression: this.options.profitAggression,
+      growthStairMode: this.options.growthStairMode,
+      blindSniperEnabled: this.options.blindSniperEnabled,
+      blindSniperMilestones: this.options.blindSniperMilestones.slice(),
+      blindSniperStakeFraction: this.options.blindSniperStakeFraction,
+      matchSniperCooldownTrades: this.options.matchSniperCooldownTrades,
+      matchSniperMaxCount: this.options.matchSniperMaxCount,
+      guideFilters: this.options.guideFilters,
+      strictBarFilters: this.options.strictBarFilters
+    };
     this.growthAnchorBalance = this.options.seed;
     this.growthLossStairTier = 0;
     this.growthLossWinStreak = 0;
@@ -340,6 +386,7 @@ class DerivDigitBot extends EventEmitter {
     this.totalTrades = 0;
     this.wins = 0;
     this.losses = 0;
+    this.recentResults = [];
     this.tradeInFlight = false;
     this.stopped = false;
     this.startedAt = null;
@@ -645,6 +692,11 @@ class DerivDigitBot extends EventEmitter {
       phase: this.phase,
       symbol: this.options.symbol,
       digitStrategyMode: this.options.digitStrategyMode,
+      autoModeEnabled: this.options.autoModeEnabled,
+      autoRiskProfile: this.options.autoRiskProfile,
+      autoState: this.autoState,
+      autoReason: this.autoReason,
+      autoDecision: this.autoLastDecision,
       tradeInFlight: this.tradeInFlight,
       digitsSeen: this.digits.length,
       windowSize: this.options.windowSize,
@@ -774,6 +826,318 @@ class DerivDigitBot extends EventEmitter {
       0.12,
       10
     );
+  }
+
+  autoRiskSettings() {
+    const requestedProfile = normalizeAutoRiskProfile(this.options.autoRiskProfile);
+    const profile =
+      requestedProfile === AUTO_RISK_PROFILES.INSANE_DEMO && this.options.mode !== 'demo'
+        ? AUTO_RISK_PROFILES.AGGRESSIVE
+        : requestedProfile;
+
+    const settings = {
+      [AUTO_RISK_PROFILES.SAFE]: {
+        profile,
+        minTradesForWinRate: 12,
+        minWinRate: 82,
+        pressureProgress: 0.42,
+        blastProgress: 0.7,
+        finishProgress: 0.78,
+        fuelFraction: 0.22,
+        blastFuelFraction: 0.38,
+        baseAggression: 2,
+        pressureAggression: 3,
+        recoveryAggression: 1,
+        defenseAggression: 1,
+        finishAggression: 2,
+        sniperAllowed: false,
+        blastAllowed: false,
+        maxLossStreak: 2,
+        drawdownDefense: 0.12,
+        matchSniperCooldownTrades: 4,
+        matchSniperMaxCount: 0
+      },
+      [AUTO_RISK_PROFILES.BALANCED]: {
+        profile,
+        minTradesForWinRate: 10,
+        minWinRate: 80,
+        pressureProgress: 0.32,
+        blastProgress: 0.62,
+        finishProgress: 0.82,
+        fuelFraction: 0.16,
+        blastFuelFraction: 0.3,
+        baseAggression: 2,
+        pressureAggression: 4,
+        recoveryAggression: 2,
+        defenseAggression: 1,
+        finishAggression: 2,
+        sniperAllowed: true,
+        blastAllowed: false,
+        maxLossStreak: 2,
+        drawdownDefense: 0.16,
+        matchSniperCooldownTrades: 3,
+        matchSniperMaxCount: 1
+      },
+      [AUTO_RISK_PROFILES.AGGRESSIVE]: {
+        profile,
+        minTradesForWinRate: 8,
+        minWinRate: 76,
+        pressureProgress: 0.22,
+        blastProgress: 0.52,
+        finishProgress: 0.86,
+        fuelFraction: 0.1,
+        blastFuelFraction: 0.22,
+        baseAggression: 3,
+        pressureAggression: 5,
+        recoveryAggression: 2,
+        defenseAggression: 1,
+        finishAggression: 3,
+        sniperAllowed: true,
+        blastAllowed: true,
+        maxLossStreak: 3,
+        drawdownDefense: 0.22,
+        matchSniperCooldownTrades: 2,
+        matchSniperMaxCount: 1
+      },
+      [AUTO_RISK_PROFILES.INSANE_DEMO]: {
+        profile,
+        minTradesForWinRate: 6,
+        minWinRate: 70,
+        pressureProgress: 0.12,
+        blastProgress: 0.35,
+        finishProgress: 0.9,
+        fuelFraction: 0.06,
+        blastFuelFraction: 0.14,
+        baseAggression: 4,
+        pressureAggression: 5,
+        recoveryAggression: 3,
+        defenseAggression: 1,
+        finishAggression: 3,
+        sniperAllowed: true,
+        blastAllowed: true,
+        maxLossStreak: 3,
+        drawdownDefense: 0.28,
+        matchSniperCooldownTrades: 1,
+        matchSniperMaxCount: 1
+      }
+    };
+
+    return settings[profile] || settings[AUTO_RISK_PROFILES.BALANCED];
+  }
+
+  recentLossStreak() {
+    let streak = 0;
+    for (let index = this.recentResults.length - 1; index >= 0; index -= 1) {
+      if (this.recentResults[index] === 'loss') streak += 1;
+      else break;
+    }
+    return streak;
+  }
+
+  applyAutoCommander(force = false) {
+    if (!this.options.autoModeEnabled) {
+      this.autoState = AUTO_STATES.MANUAL;
+      this.autoReason = '';
+      return {
+        enabled: false,
+        state: this.autoState,
+        reason: this.autoReason
+      };
+    }
+
+    const settings = this.autoRiskSettings();
+    if (this.options.autoRiskProfile !== settings.profile) {
+      this.options.autoRiskProfile = settings.profile;
+    }
+    const reviewDue =
+      force ||
+      this.autoLastReviewTrade < 0 ||
+      this.totalTrades === 0 ||
+      this.totalTrades - this.autoLastReviewTrade >= this.options.autoReviewIntervalTrades;
+    const confidenceGate = this.confidenceGateState();
+    const progress = this.progressRatio();
+    const sessionProgress = this.sessionProgressRatio();
+    const winRate = this.winRate();
+    const recoveryDebt = this.currentRecoveryDebt();
+    const targetGap = Math.max(this.options.minStake, this.options.target - this.options.seed);
+    const remainingGap = Math.max(0, this.options.target - this.effectiveGrowthBalance());
+    const profitAboveSeed = Math.max(0, this.effectiveGrowthBalance() - this.options.seed);
+    const profitFuel = Math.max(0, this.effectiveGrowthBalance() - Math.max(this.options.seed, this.riskFloor));
+    const fuelNeeded = Math.max(this.options.minStake * 2, targetGap * settings.fuelFraction);
+    const blastFuelNeeded = Math.max(this.options.minStake * 3, targetGap * settings.blastFuelFraction);
+    const lossStreak = this.recentLossStreak();
+    const weakWinRate = this.totalTrades >= settings.minTradesForWinRate && winRate < settings.minWinRate;
+    const drawdownDefense = this.effectiveGrowthBalance() < this.options.seed * (1 - settings.drawdownDefense);
+    const recoveryOpen =
+      recoveryDebt > 0 ||
+      this.splitRecoveryArmed ||
+      [PHASES.MARTINGALE, PHASES.REBUILD].includes(this.phase);
+    const defenseNeeded =
+      !recoveryOpen &&
+      (confidenceGate.locked || weakWinRate || drawdownDefense || lossStreak >= settings.maxLossStreak);
+    const canSpendFuel =
+      !recoveryOpen &&
+      !defenseNeeded &&
+      this.phase !== PHASES.STOPPED &&
+      profitFuel >= fuelNeeded &&
+      (this.totalTrades < settings.minTradesForWinRate || winRate >= settings.minWinRate);
+    const pressureEligible =
+      canSpendFuel &&
+      progress >= settings.pressureProgress &&
+      remainingGap > this.options.minStake;
+    const blastEligible =
+      pressureEligible &&
+      settings.blastAllowed &&
+      progress >= settings.blastProgress &&
+      profitFuel >= blastFuelNeeded &&
+      (this.totalTrades < settings.minTradesForWinRate || winRate >= settings.minWinRate + 4);
+    const finishNeeded =
+      !recoveryOpen &&
+      progress >= settings.finishProgress &&
+      remainingGap <= Math.max(this.options.minStake * 2, targetGap * 0.25);
+
+    let nextState = AUTO_STATES.GRIND;
+    let reason = 'Auto is grinding with the base strategy until it earns enough profit fuel.';
+    const patch = {
+      symbol: 'R_10',
+      digitStrategyMode: DIGIT_STRATEGY_MODES.BASE,
+      profitAggression: settings.baseAggression,
+      growthStairMode: GROWTH_STAIR_MODES.LOSS_PRESSURE,
+      blindSniperEnabled: false,
+      guideFilters: false,
+      strictBarFilters: false,
+      matchSniperCooldownTrades: settings.matchSniperCooldownTrades,
+      matchSniperMaxCount: settings.matchSniperMaxCount
+    };
+
+    if (this.totalTrades < settings.minTradesForWinRate && profitAboveSeed < fuelNeeded) {
+      nextState = AUTO_STATES.SCOUT;
+      reason = `Auto scout is collecting ${settings.minTradesForWinRate} trades or ${fuelNeeded.toFixed(2)} profit fuel before unlocking high-risk weapons.`;
+      patch.profitAggression = Math.min(settings.baseAggression, 2);
+      patch.growthStairMode = GROWTH_STAIR_MODES.OFF;
+    } else if (recoveryOpen) {
+      nextState = AUTO_STATES.RECOVERY;
+      reason = `Auto recovery is active because ${recoveryDebt.toFixed(2)} recovery debt is open. High-risk weapons are locked until the debt clears.`;
+      patch.profitAggression = settings.recoveryAggression;
+      patch.growthStairMode = GROWTH_STAIR_MODES.OFF;
+    } else if (defenseNeeded) {
+      nextState = AUTO_STATES.DEFENSE;
+      reason = weakWinRate
+        ? `Auto defense is active because win rate ${winRate.toFixed(1)}% is below ${settings.minWinRate}%.`
+        : drawdownDefense
+          ? 'Auto defense is active because session equity is under the drawdown defense line.'
+          : lossStreak >= settings.maxLossStreak
+            ? `Auto defense is active after ${lossStreak} consecutive losses.`
+            : 'Auto defense is active because the confidence gate is locked.';
+      patch.profitAggression = settings.defenseAggression;
+      patch.growthStairMode = GROWTH_STAIR_MODES.OFF;
+    } else if (finishNeeded) {
+      nextState = AUTO_STATES.FINISH;
+      reason = `Auto finish mode is protecting progress near target. Remaining gap ${remainingGap.toFixed(2)}; high-risk weapons are locked.`;
+      patch.profitAggression = settings.finishAggression;
+      patch.growthStairMode = GROWTH_STAIR_MODES.LOSS_PRESSURE;
+    } else if (blastEligible) {
+      nextState = AUTO_STATES.BLAST;
+      reason = `Auto blast unlocked: profit fuel ${profitFuel.toFixed(2)} covers the ${blastFuelNeeded.toFixed(2)} blast requirement.`;
+      patch.digitStrategyMode = DIGIT_STRATEGY_MODES.MATCH_SNIPER;
+      patch.profitAggression = settings.pressureAggression;
+      patch.blindSniperEnabled = settings.sniperAllowed;
+      patch.growthStairMode = GROWTH_STAIR_MODES.LOSS_PRESSURE;
+    } else if (pressureEligible) {
+      nextState = AUTO_STATES.PRESSURE;
+      reason = `Auto pressure unlocked: profit fuel ${profitFuel.toFixed(2)} covers the ${fuelNeeded.toFixed(2)} high-risk requirement.`;
+      patch.digitStrategyMode = DIGIT_STRATEGY_MODES.EXTREME;
+      patch.profitAggression = settings.pressureAggression;
+      patch.blindSniperEnabled = settings.sniperAllowed && profitFuel >= Math.max(this.options.minStake * 3, targetGap * 0.2);
+      patch.growthStairMode = GROWTH_STAIR_MODES.LOSS_PRESSURE;
+    } else {
+      nextState = AUTO_STATES.GRIND;
+      reason = `Auto grind is building fuel. Profit fuel ${profitFuel.toFixed(2)}/${fuelNeeded.toFixed(2)}, progress ${Math.round(progress * 100)}%.`;
+      patch.profitAggression = settings.baseAggression;
+    }
+
+    const before = {
+      symbol: this.options.symbol,
+      digitStrategyMode: this.options.digitStrategyMode,
+      profitAggression: this.options.profitAggression,
+      growthStairMode: this.options.growthStairMode,
+      blindSniperEnabled: this.options.blindSniperEnabled,
+      guideFilters: this.options.guideFilters,
+      strictBarFilters: this.options.strictBarFilters,
+      matchSniperCooldownTrades: this.options.matchSniperCooldownTrades,
+      matchSniperMaxCount: this.options.matchSniperMaxCount
+    };
+
+    const next = {
+      symbol: normalizeSymbol(patch.symbol, before.symbol),
+      digitStrategyMode: normalizeDigitStrategyMode(patch.digitStrategyMode),
+      profitAggression: clamp(toNumber(patch.profitAggression, before.profitAggression), 1, 5),
+      growthStairMode: normalizeGrowthStairMode(patch.growthStairMode, patch.growthStairMode !== GROWTH_STAIR_MODES.OFF),
+      blindSniperEnabled: Boolean(patch.blindSniperEnabled),
+      guideFilters: Boolean(patch.guideFilters),
+      strictBarFilters: Boolean(patch.strictBarFilters),
+      matchSniperCooldownTrades: Math.max(1, Math.floor(toNumber(patch.matchSniperCooldownTrades, before.matchSniperCooldownTrades))),
+      matchSniperMaxCount: Math.max(0, Math.floor(toNumber(patch.matchSniperMaxCount, before.matchSniperMaxCount)))
+    };
+
+    const changed = Object.keys(next).some((key) => before[key] !== next[key]);
+    const stateChanged = nextState !== this.autoState || reason !== this.autoReason;
+
+    if (changed) {
+      const strategyChanged =
+        before.symbol !== next.symbol ||
+        before.digitStrategyMode !== next.digitStrategyMode;
+      Object.assign(this.options, next);
+      if (strategyChanged) {
+        this.lastProposalProfitRatio = this.strategyFallbackProfitRatio();
+      }
+    }
+
+    this.autoState = nextState;
+    this.autoReason = reason;
+    this.autoLastDecision = {
+      state: nextState,
+      reason,
+      profile: settings.profile,
+      changed,
+      progress,
+      sessionProgress,
+      winRate,
+      profitFuel: roundMoney(profitFuel),
+      fuelNeeded: roundMoney(fuelNeeded),
+      blastFuelNeeded: roundMoney(blastFuelNeeded),
+      recoveryDebt: roundMoney(recoveryDebt),
+      remainingGap: roundMoney(remainingGap),
+      lossStreak,
+      settings: next
+    };
+
+    if ((changed || stateChanged || reviewDue) && reviewDue) {
+      this.autoLastReviewTrade = this.totalTrades;
+      this.emitAnalysis(
+        'auto_commander',
+        `${reason} Auto set ${next.symbol}, ${next.digitStrategyMode}, aggression ${next.profitAggression}/5.`,
+        { auto: this.autoLastDecision }
+      );
+    }
+
+    return {
+      enabled: true,
+      ...this.autoLastDecision
+    };
+  }
+
+  autoTelemetry() {
+    return {
+      autoModeEnabled: this.options.autoModeEnabled,
+      autoRiskProfile: this.options.autoRiskProfile,
+      autoState: this.autoState,
+      autoReason: this.autoReason,
+      autoDecision: this.autoLastDecision,
+      autoReviewIntervalTrades: this.options.autoReviewIntervalTrades,
+      autoLastReviewTrade: this.autoLastReviewTrade,
+      recentResults: this.recentResults.slice(-20)
+    };
   }
 
   progressRatio() {
@@ -1498,21 +1862,23 @@ class DerivDigitBot extends EventEmitter {
     const stats = this.stats();
     const over = digitOverCondition(7, 'Over 7');
     const under = digitUnderCondition(2, 'Under 2');
+    const overMetrics = this.extremeConditionMetrics(over, currentDigit, stats);
+    const underMetrics = this.extremeConditionMetrics(under, currentDigit, stats);
 
     if (ignoreGuideFilters) {
-      const overHits = stats.window.filter(over.wins).length;
-      const underHits = stats.window.filter(under.wins).length;
-      if (overHits < underHits) return over;
-      if (underHits < overHits) return under;
-      return stats.counts[8] + stats.counts[9] <= stats.counts[0] + stats.counts[1] ? over : under;
+      if (overMetrics.score > underMetrics.score) return over;
+      if (underMetrics.score > overMetrics.score) return under;
+      return overMetrics.windowHitRate >= underMetrics.windowHitRate ? over : under;
     }
 
-    let condition = null;
-    if (currentDigit === over.entryDigit) condition = over;
-    if (currentDigit === under.entryDigit) condition = under;
-    if (!condition) return null;
-    if (!this.options.guideFilters) return condition;
-    return this.extremeGuideAllows(condition, currentDigit, stats) ? condition : null;
+    const candidates = [
+      { condition: over, metrics: overMetrics },
+      { condition: under, metrics: underMetrics }
+    ]
+      .filter((candidate) => candidate.metrics.allowed)
+      .sort((a, b) => b.metrics.score - a.metrics.score);
+
+    return candidates[0] ? candidates[0].condition : null;
   }
 
   selectMatchSniperCondition(currentDigit, { ignoreGuideFilters = false } = {}) {
@@ -1536,20 +1902,71 @@ class DerivDigitBot extends EventEmitter {
     return digitMatchCondition(target);
   }
 
-  extremeGuideAllows(condition, currentDigit, stats) {
-    if (currentDigit !== condition.entryDigit) return false;
-
-    const winningHits = stats.window.filter(condition.wins).length;
-    const expectedHits = this.options.windowSize * 0.2;
-    if (winningHits > expectedHits + 1) return false;
-
-    if (this.options.strictBarFilters) {
-      const winningDigits = condition.contractType === 'DIGITOVER' ? [8, 9] : [0, 1];
-      const winningSideHot = winningDigits.some((digit) => stats.hotDigits.includes(digit));
-      if (winningSideHot) return false;
+  extremeConditionMetrics(condition, currentDigit, stats = this.stats()) {
+    const winningDigits = condition.contractType === 'DIGITOVER' ? [8, 9] : [0, 1];
+    const last10 = stats.window.slice(-10);
+    const last5 = stats.window.slice(-5);
+    const windowHits = stats.window.filter(condition.wins).length;
+    const previousHits = stats.previousCounts
+      ? winningDigits.reduce((sum, digit) => sum + stats.previousCounts[digit], 0)
+      : windowHits;
+    const last10Hits = last10.filter(condition.wins).length;
+    const last5Hits = last5.filter(condition.wins).length;
+    const currentSideAligned = condition.contractType === 'DIGITOVER'
+      ? currentDigit >= condition.entryDigit
+      : currentDigit <= condition.entryDigit;
+    let losingStreak = 0;
+    for (let index = stats.window.length - 1; index >= 0; index -= 1) {
+      if (condition.wins(stats.window[index])) break;
+      losingStreak += 1;
     }
 
-    return true;
+    const windowSize = Math.max(1, stats.window.length);
+    const windowHitRate = windowHits / windowSize;
+    const previousHitRate = previousHits / Math.max(1, this.options.windowSize);
+    const shortHitRate = last10Hits / Math.max(1, last10.length);
+    const microHitRate = last5Hits / Math.max(1, last5.length);
+    const breakEvenRate = 1 / (1 + this.strategyFallbackProfitRatio());
+    const minWindowHits = Math.max(5, Math.ceil(windowSize * (breakEvenRate + 0.03)));
+    const minShortHits = Math.max(2, Math.ceil(Math.max(1, last10.length) * breakEvenRate));
+    const trendStable = !stats.previousCounts || windowHits >= previousHits - 1;
+    const guidePenalty = this.options.guideFilters && !currentSideAligned ? 0.08 : 0;
+    const score =
+      windowHitRate - breakEvenRate +
+      (shortHitRate - breakEvenRate) * 0.6 +
+      (microHitRate - breakEvenRate) * 0.25 +
+      (currentSideAligned ? 0.04 : -0.02) -
+      losingStreak * 0.015 -
+      guidePenalty;
+    const allowed =
+      stats.window.length >= this.options.windowSize &&
+      windowHits >= minWindowHits &&
+      last10Hits >= minShortHits &&
+      last5Hits >= 1 &&
+      losingStreak <= 4 &&
+      trendStable &&
+      (!this.options.guideFilters || currentSideAligned) &&
+      (!this.options.strictBarFilters || microHitRate >= breakEvenRate);
+
+    return {
+      allowed,
+      score,
+      winningDigits,
+      windowHits,
+      previousHits,
+      last10Hits,
+      last5Hits,
+      losingStreak,
+      windowHitRate,
+      previousHitRate,
+      shortHitRate,
+      microHitRate,
+      breakEvenRate,
+      minWindowHits,
+      minShortHits,
+      trendStable,
+      currentSideAligned
+    };
   }
 
   guideAllows(condition, currentDigit, stats) {
@@ -1580,6 +1997,8 @@ class DerivDigitBot extends EventEmitter {
       this.stop('insufficient_session_balance');
       return null;
     }
+
+    this.applyAutoCommander();
 
     const calibration = this.goalCalibration();
     const confidenceGate = this.confidenceGateState();
@@ -1853,6 +2272,8 @@ class DerivDigitBot extends EventEmitter {
     this.totalTrades += 1;
     if (result.won) this.wins += 1;
     else this.losses += 1;
+    this.recentResults.push(result.won ? 'win' : 'loss');
+    if (this.recentResults.length > 20) this.recentResults = this.recentResults.slice(-20);
 
     if (plan.kind === PHASES.BLIND_SNIPER) {
       this.blindSniperUses += 1;
@@ -1897,6 +2318,11 @@ class DerivDigitBot extends EventEmitter {
       plan: plan.kind,
       symbol: this.options.symbol,
       digitStrategyMode: this.options.digitStrategyMode,
+      autoModeEnabled: this.options.autoModeEnabled,
+      autoRiskProfile: this.options.autoRiskProfile,
+      autoState: this.autoState,
+      autoReason: this.autoReason,
+      autoDecision: this.autoLastDecision,
       contractId: result.contractId,
       growthTier: this.growthTier(),
       growthStep: this.growthMilestoneStep(),
@@ -1972,6 +2398,7 @@ class DerivDigitBot extends EventEmitter {
       `session_balance=${tradeEvent.effectiveGrowthBalance.toFixed(2)} overlay=${tradeEvent.sniperOverlayNet.toFixed(2)} ` +
       `growth_floor=${tradeEvent.growthFloor.toFixed(2)} floor=${this.riskFloor.toFixed(2)} debt=${this.currentRecoveryDebt().toFixed(2)} ` +
       `symbol=${tradeEvent.symbol} digit_strategy=${tradeEvent.digitStrategyMode} goal_mode=${tradeEvent.goalMode} ` +
+      `auto=${tradeEvent.autoModeEnabled ? `${tradeEvent.autoState}/${tradeEvent.autoRiskProfile}` : 'off'} ` +
       `payout_ratio=${tradeEvent.estimatedWinProfitRatio.toFixed(2)} ` +
       `stair_mode=${tradeEvent.growthStairMode} loss_tier=${tradeEvent.growthLossStairTier}/${tradeEvent.lossStairMaxTier} ` +
       `aggression=${tradeEvent.profitAggression}/5 ` +
@@ -2226,6 +2653,7 @@ class DerivDigitBot extends EventEmitter {
       balance: this.balance,
       symbol: this.options.symbol,
       digitStrategyMode: this.options.digitStrategyMode,
+      ...this.autoTelemetry(),
       riskFloor: this.riskFloor,
       recoveryDebt: this.currentRecoveryDebt(),
       effectiveGrowthBalance: this.effectiveGrowthBalance(),
@@ -2302,6 +2730,7 @@ class DerivDigitBot extends EventEmitter {
       phase: this.phase,
       symbol: this.options.symbol,
       digitStrategyMode: this.options.digitStrategyMode,
+      ...this.autoTelemetry(),
       seed: this.options.seed,
       target: this.options.target,
       profitLoss: roundMoney(this.balance - this.options.seed),
@@ -2390,6 +2819,7 @@ class DerivDigitBot extends EventEmitter {
       accountKind: this.accountKind,
       symbol: this.options.symbol,
       digitStrategyMode: this.options.digitStrategyMode,
+      ...this.autoTelemetry(),
       phase: this.phase,
       seed: this.options.seed,
       target: this.options.target,
@@ -2460,6 +2890,7 @@ class DerivDigitBot extends EventEmitter {
       phase: this.phase,
       symbol: this.options.symbol,
       digitStrategyMode: this.options.digitStrategyMode,
+      ...this.autoTelemetry(),
       riskFloor: this.riskFloor,
       recoveryDebt: this.currentRecoveryDebt(),
       effectiveGrowthBalance: this.effectiveGrowthBalance(),
@@ -2552,6 +2983,17 @@ class DerivDigitBot extends EventEmitter {
     this.phase = snapshot.phase || this.phase;
     this.options.symbol = normalizeSymbol(snapshot.symbol, this.options.symbol);
     this.options.digitStrategyMode = normalizeDigitStrategyMode(snapshot.digitStrategyMode ?? this.options.digitStrategyMode);
+    this.options.autoModeEnabled = Boolean(snapshot.autoModeEnabled ?? this.options.autoModeEnabled);
+    this.options.autoRiskProfile = normalizeAutoRiskProfile(snapshot.autoRiskProfile ?? this.options.autoRiskProfile);
+    this.options.autoReviewIntervalTrades = Math.max(1, Math.floor(toNumber(snapshot.autoReviewIntervalTrades, this.options.autoReviewIntervalTrades)));
+    this.autoState = this.options.autoModeEnabled
+      ? String(snapshot.autoState || this.autoState || AUTO_STATES.SCOUT)
+      : AUTO_STATES.MANUAL;
+    this.autoReason = String(snapshot.autoReason || this.autoReason || '');
+    this.autoLastDecision = snapshot.autoDecision && typeof snapshot.autoDecision === 'object'
+      ? snapshot.autoDecision
+      : this.autoLastDecision;
+    this.autoLastReviewTrade = Math.floor(toNumber(snapshot.autoLastReviewTrade, this.autoLastReviewTrade));
     this.riskFloor = roundMoney(toNumber(snapshot.riskFloor, this.riskFloor));
     this.recoveryDebt = roundMoney(toNumber(snapshot.recoveryDebt, this.recoveryDebt));
     this.sniperOverlayNet = roundMoney(toNumber(snapshot.sniperOverlayNet, this.sniperOverlayNet));
@@ -2596,6 +3038,9 @@ class DerivDigitBot extends EventEmitter {
     this.totalTrades = Math.max(0, Math.floor(toNumber(snapshot.totalTrades, this.totalTrades)));
     this.wins = Math.max(0, Math.floor(toNumber(snapshot.wins, this.wins)));
     this.losses = Math.max(0, Math.floor(toNumber(snapshot.losses, this.losses)));
+    this.recentResults = Array.isArray(snapshot.recentResults)
+      ? snapshot.recentResults.filter((value) => value === 'win' || value === 'loss').slice(-20)
+      : this.recentResults;
     this.paused = Boolean(snapshot.paused);
     this.pauseRequested = false;
     this.pauseReason = snapshot.pauseReason || 'manual';
@@ -2650,6 +3095,7 @@ class DerivDigitBot extends EventEmitter {
       accountKind: this.accountKind,
       symbol: this.options.symbol,
       digitStrategyMode: this.options.digitStrategyMode,
+      ...this.autoTelemetry(),
       riskFloor: this.riskFloor,
       recoveryDebt: this.currentRecoveryDebt(),
       effectiveGrowthBalance: this.effectiveGrowthBalance(),
