@@ -109,9 +109,24 @@
       "value": "0.08",
       "required": false
     },
+    "PROFIT_AGGRESSION": {
+      "description": "Dashboard default for compact-target aggression, from 1 conservative to 5 most aggressive.",
+      "value": "2",
+      "required": false
+    },
     "RECOVERY_BUFFER_PERCENT": {
       "description": "Extra profit margin added to recovery stakes so they can reclaim the protected floor faster.",
       "value": "0.05",
+      "required": false
+    },
+    "ALL_IN_LOSS_STREAK_THRESHOLD": {
+      "description": "Consecutive completed losses before the emergency all-in recovery shot can arm.",
+      "value": "3",
+      "required": false
+    },
+    "ALL_IN_STAKE_PERCENT": {
+      "description": "Fraction of remaining session balance used by the emergency all-in recovery shot.",
+      "value": "0.99",
       "required": false
     },
     "BLIND_SNIPER_ENABLED": {
@@ -132,6 +147,11 @@
     "BLIND_SNIPER_START_RATIO": {
       "description": "Session progress ratio needed before blind sniper can arm.",
       "value": "0.75",
+      "required": false
+    },
+    "BLIND_SNIPER_MILESTONES": {
+      "description": "Comma-separated sniper progress marks. Values above 1 are treated as percentages; negative marks are allowed.",
+      "value": "25,50,75",
       "required": false
     },
     "BLIND_SNIPER_STAKE_FRACTION": {

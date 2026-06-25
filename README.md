@@ -7,7 +7,7 @@ The bot has no paper-trading simulator. It connects to Deriv and can run against
 ## What It Implements
 
 - Node.js, `ws`, `express`, `socket.io`, no frontend framework, no TypeScript.
-- Dashboard inputs for a single Deriv authorization token, optional account ID, seed, target, demo/real mode, guide filters, strict bar filters, and the blind sniper toggle.
+- Dashboard inputs for a single Deriv authorization token, optional account ID, seed, target, demo/real mode, guide filters, strict bar filters, growth stairs, optional initial stake, profit aggression, and blind sniper settings.
 - Demo/real mode selects which account type the bot requests from Deriv. If you pin an account ID, it must match the selected mode.
 - The dashboard shows both the live Deriv account balance and the bot's session equity, so you can tell real funds from the seed-based strategy ledger.
 - The dashboard also shows live analysis status, so you can see whether the bot is warming up, waiting for a setup, or already in a trade.
@@ -17,8 +17,10 @@ The bot has no paper-trading simulator. It connects to Deriv and can run against
 - Session balance starts at the seed you enter. The bot uses contract profit/loss to update that session balance.
 - The bot preloads recent tick history on start so it can evaluate the 20-digit window immediately instead of waiting for a fresh warmup.
 - If a trade attempt fails, the bot now pauses briefly and keeps analyzing instead of stopping outright on the first error.
-- Growth mode now uses a small stake staircase: each mini profit milestone nudges the growth stake floor upward, so long win streaks stop feeling flat.
-- Optional blind sniper overlay: after every 3 completed trades, once the run is at least 75 percent of the way from seed to target, the bot can take up to 3 blind sniper shots at one-third of session balance.
+- Optional growth stairs raise the growth stake floor after mini profit milestones, so long win streaks stop feeling flat.
+- Compact-target mode is enabled automatically when the target gap is 25 percent of seed or less. It uses a target-gap-aware profit gate and a `profit_push` plan to press harder near the close instead of waiting for a seed-sized risky-jump gate.
+- Profit aggression is a 1-5 dashboard slider. Higher values start compact-target profit-push trades earlier, increase growth/profit pressure, and shorten risk cooldowns while still blocking snipes and martingale revenge during weak win-rate conditions.
+- Optional blind sniper overlay supports any number of comma-separated progress marks, including negative recovery marks. Each mark is one possible shot, with stake caps near the target so small-profit runs are not broken by a one-third-balance shot.
 - Volatility 100 Index symbol: `R_100`.
 - Contracts: `DIGITOVER` barrier `1`, and `DIGITUNDER` barrier `8`.
 - Last 20 digits are tracked. The bot chooses whichever condition has hit less often recently.
@@ -39,8 +41,16 @@ Growth mode:
 - The growth stake floor rises in small steps as the session gains profit.
 - Each mini milestone is based on a small profit chunk above the seed, and each step bumps the growth floor by a fixed percentage of the minimum stake.
 - When session balance reaches the protected floor plus the profit gate step, the bot enters Risky Jump.
-- The gate step defaults to 8 percent of the seed, or at least two minimum stakes, whichever is higher.
+- On standard goals, the gate step defaults to 8 percent of the seed, or at least two minimum stakes, whichever is higher.
+- On compact goals, the gate step is capped from the actual seed-to-target gap, so a `$100 -> $105` run no longer waits for an `$8` profit wave before using stronger closeout logic.
 - Every winning trade can push the protected floor higher.
+
+Profit push:
+
+- Only runs in compact-target mode, only while no recovery debt is open.
+- Arms after the configured profit-progress threshold, which moves earlier as profit aggression is increased.
+- Sizes stake from the remaining target gap and the observed digit-contract win payout ratio, then caps exposure as a fraction of session equity.
+- Pauses automatically when the confidence gate is active, recovery is open, or split recovery is armed.
 
 Risky Jump:
 
@@ -66,10 +76,17 @@ Blind sniper overlay:
 
 - Disabled by default.
 - Ignores the extra guide filters.
-- Arms only when the run is at least 75 percent of the way from seed to target.
-- Fires after 3 completed trades, regardless of win or loss.
-- Uses one-third of session balance for the shot.
-- Stops arming after 3 sniper shots in the same run.
+- Arms at the configured progress marks. Defaults are `25, 50, 75`.
+- Use negative marks such as `-50, -25` if you want snipes to reset and re-arm while climbing back from below seed.
+- Fires after the configured completed-trade cadence, regardless of win or loss.
+- Starts from one-third of session balance, then applies gap/profit caps so compact targets do not risk a huge shot for a small remaining profit.
+- Stops arming after all configured marks have been used. Add more marks if you want more than 3 possible shots.
+
+Emergency all-in:
+
+- If the last completed trades stack into the configured loss streak, the bot can fire one emergency recovery shot before returning to the normal recovery ledger.
+- Defaults are `ALL_IN_LOSS_STREAK_THRESHOLD=3` and `ALL_IN_STAKE_PERCENT=0.99`.
+- It is intended as an optional last-resort recovery mechanic; keep it on demo until the behavior is proven.
 
 Exit:
 
@@ -120,11 +137,15 @@ GROWTH_MILESTONE_PERCENT=0.025
 GROWTH_STAKE_BUMP_PERCENT=0.15
 GROWTH_STAKE_CAP_PERCENT=0.12
 PROFIT_GATE_PERCENT=0.08
+PROFIT_AGGRESSION=2
 RECOVERY_BUFFER_PERCENT=0.05
+ALL_IN_LOSS_STREAK_THRESHOLD=3
+ALL_IN_STAKE_PERCENT=0.99
 BLIND_SNIPER_ENABLED=false
 BLIND_SNIPER_CADENCE_TRADES=3
 BLIND_SNIPER_MAX_USES=3
 BLIND_SNIPER_START_RATIO=0.75
+BLIND_SNIPER_MILESTONES=25,50,75
 BLIND_SNIPER_STAKE_FRACTION=0.3333333333
 WINDOW_SIZE=20
 GUIDE_FILTERS=false

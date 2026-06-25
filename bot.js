@@ -39,6 +39,8 @@ const CONFIDENCE_THROTTLE_MIN_MS = 2500;
 const CONFIDENCE_THROTTLE_MAX_MS = 12000;
 const BLIND_SNIPER_PROFIT_CAP_FRACTION = 0.25;
 const BLIND_SNIPER_PROGRESS_TAPER_FLOOR = 0.2;
+const DEFAULT_DIGIT_WIN_PROFIT_RATIO = 0.22;
+const PROFIT_AGGRESSION_DEFAULT = 2;
 
 function toNumber(value, fallback) {
   const number = Number(value);
@@ -188,6 +190,7 @@ class DerivDigitBot extends EventEmitter {
       growthStakeBumpPercent: toNumber(options.growthStakeBumpPercent, 0.15),
       growthStakeCapPercent: toNumber(options.growthStakeCapPercent, 0.12),
       profitGatePercent: toNumber(options.profitGatePercent, 0.08),
+      profitAggression: clamp(toNumber(options.profitAggression, PROFIT_AGGRESSION_DEFAULT), 1, 5),
       recoveryBufferPercent: toNumber(options.recoveryBufferPercent, 0.05),
       growthStairsEnabled: options.growthStairsEnabled === true,
       initialStake: toOptionalNumber(options.initialStake, null),
@@ -217,7 +220,7 @@ class DerivDigitBot extends EventEmitter {
     this.phase = PHASES.GROWTH;
     this.riskFloor = this.options.seed;
     this.recoveryDebt = 0;
-    this.lastWinProfitRatio = 0.95;
+    this.lastWinProfitRatio = DEFAULT_DIGIT_WIN_PROFIT_RATIO;
     this.lastPipSize = 2;
     this.growthAnchorBalance = this.options.seed;
     this.martingaleLossStreak = 0;
@@ -556,6 +559,9 @@ class DerivDigitBot extends EventEmitter {
       blindSniperTradesUntilShot: Math.max(0, calibration.sniperCadenceTrades - this.tradesSinceBlindSniper),
       blindSniperProgress: this.sessionProgressRatio(),
       blindSniperArmed: this.blindSniperState().armed,
+      profitAggression: this.options.profitAggression,
+      profitPushStartRatio: calibration.profitPushStartRatio,
+      profitPushCapPercent: calibration.profitPushCapPercent,
       martingaleLossStreak: this.martingaleLossStreak,
       splitRecoveryArmed: this.splitRecoveryArmed,
       splitRecoveryReadyAtTrade: this.splitRecoveryReadyAtTrade,
@@ -604,17 +610,31 @@ class DerivDigitBot extends EventEmitter {
     const boost = confidenceGate.locked ? 1 : calibration.growthBoost;
     const rawStake = Math.max(this.effectiveGrowthBalance() * this.options.baseStakePercent * boost, floor);
     const floorCapPercent = Math.min(1, floor / Math.max(this.balance, this.options.minStake));
-    const capPercent = Math.max(this.options.growthStakeCapPercent, floorCapPercent);
+    const capPercent = Math.max(this.options.growthStakeCapPercent, calibration.growthStakeCapPercent, floorCapPercent);
     return this.normalizeStake(rawStake, capPercent);
   }
 
   riskyStakePercent(progress = this.progressRatio()) {
     const calibration = this.goalCalibration();
     const progressValue = clamp(Number(progress) || 0, 0, 1);
-    const basePercent = this.options.riskyStakePercent * (calibration.compact ? 0.8 : 1);
+    const basePercent = calibration.compact
+      ? Math.min(this.options.riskyStakePercent, calibration.compactRiskyStakePercent)
+      : this.options.riskyStakePercent;
     return progressValue >= 0.6
       ? basePercent * 0.5
       : basePercent;
+  }
+
+  profitAggressionRatio() {
+    return clamp((toNumber(this.options.profitAggression, PROFIT_AGGRESSION_DEFAULT) - 1) / 4, 0, 1);
+  }
+
+  estimatedWinProfitRatio() {
+    return clamp(
+      toNumber(this.lastWinProfitRatio, DEFAULT_DIGIT_WIN_PROFIT_RATIO),
+      0.12,
+      1
+    );
   }
 
   progressRatio() {
@@ -644,6 +664,7 @@ class DerivDigitBot extends EventEmitter {
   }
 
   confidenceThrottleState(confidenceGate = this.confidenceGateState()) {
+    const calibration = this.goalCalibration();
     const eligible =
       confidenceGate.locked &&
       confidenceGate.progress > 0 &&
@@ -661,10 +682,12 @@ class DerivDigitBot extends EventEmitter {
 
     const deficit = Math.max(0, confidenceGate.triggerWinRate - confidenceGate.winRate);
     const severity = clamp(deficit, 0, 8);
+    const cooldownFloor = CONFIDENCE_THROTTLE_MIN_MS * calibration.riskCooldownScale;
     const cooldownMs = Math.round(
       clamp(
-        CONFIDENCE_THROTTLE_MIN_MS + severity * 700 + (confidenceGate.winRate < 80 ? 1000 : 0),
-        CONFIDENCE_THROTTLE_MIN_MS,
+        (CONFIDENCE_THROTTLE_MIN_MS + severity * 700 + (confidenceGate.winRate < 80 ? 1000 : 0)) *
+          calibration.riskCooldownScale,
+        cooldownFloor,
         CONFIDENCE_THROTTLE_MAX_MS
       )
     );
@@ -725,24 +748,40 @@ class DerivDigitBot extends EventEmitter {
     const gap = Math.max(0, target - seed);
     const gapRatio = gap / Math.max(0.01, seed);
     const compact = gapRatio <= 0.25;
+    const aggression = this.profitAggressionRatio();
 
     return {
       compact,
       label: compact ? 'compact' : 'standard',
       gap,
       gapRatio,
-      growthBoost: compact ? 1.25 : 1,
+      profitAggression: this.options.profitAggression,
+      profitAggressionRatio: aggression,
+      growthBoost: compact ? 1.25 + aggression * 0.45 : 1 + aggression * 0.12,
+      growthStakeCapPercent: compact
+        ? Math.max(this.options.growthStakeCapPercent, 0.12 + aggression * 0.06)
+        : this.options.growthStakeCapPercent,
       floorRetainPercent: compact ? 0.65 : 1,
       recoveryCapPercent: compact ? 0.18 : 0.24,
       recoveryGapFraction: compact ? 0.35 : 0.5,
-      splitRecoveryCapPercent: compact ? 0.15 : this.options.splitRecoveryCapPercent,
+      splitRecoveryCapPercent: compact ? 0.15 + aggression * 0.03 : this.options.splitRecoveryCapPercent,
       splitRecoveryGapFraction: compact ? 0.25 : 0.33,
-      sniperBoost: compact ? 1.35 : 1,
-      sniperGapFraction: compact ? 0.45 : 1 / 3,
-      sniperProfitCapFraction: compact ? 0.35 : BLIND_SNIPER_PROFIT_CAP_FRACTION,
-      sniperProgressTaperFloor: compact ? 0.15 : BLIND_SNIPER_PROGRESS_TAPER_FLOOR,
-      sniperCadenceTrades: compact ? Math.max(2, this.options.blindSniperCadenceTrades - 1) : this.options.blindSniperCadenceTrades,
-      martingaleRetryLimit: compact ? 1 : this.options.martingaleRetryLimit
+      sniperBoost: compact ? 1.2 + aggression * 0.35 : 1,
+      sniperGapFraction: compact ? 0.38 + aggression * 0.12 : 1 / 3,
+      sniperProfitCapFraction: compact ? 0.3 + aggression * 0.15 : BLIND_SNIPER_PROFIT_CAP_FRACTION,
+      sniperProgressTaperFloor: compact ? 0.14 + aggression * 0.08 : BLIND_SNIPER_PROGRESS_TAPER_FLOOR,
+      sniperCadenceTrades: compact
+        ? Math.max(1, this.options.blindSniperCadenceTrades - (aggression >= 0.75 ? 2 : 1))
+        : this.options.blindSniperCadenceTrades,
+      martingaleRetryLimit: compact ? 1 : this.options.martingaleRetryLimit,
+      compactRiskyStakePercent: compact ? 0.08 + aggression * 0.07 : this.options.riskyStakePercent,
+      profitGateGapFraction: compact ? 0.62 - aggression * 0.22 : 1,
+      profitPushStartRatio: compact ? Math.max(0.18, 0.4 - aggression * 0.18) : 0.7,
+      profitPushGapFraction: compact ? 0.35 + aggression * 0.25 : 0.25 + aggression * 0.15,
+      profitPushStakeMultiplier: 1.15 + aggression * 0.9,
+      profitPushCapPercent: compact ? 0.08 + aggression * 0.08 : 0.06 + aggression * 0.04,
+      riskCooldownScale: 1 - aggression * 0.35,
+      estimatedWinProfitRatio: this.estimatedWinProfitRatio()
     };
   }
 
@@ -885,7 +924,69 @@ class DerivDigitBot extends EventEmitter {
   }
 
   profitGateStep() {
-    return roundMoney(Math.max(this.options.minStake * 2, this.options.seed * this.options.profitGatePercent));
+    const calibration = this.goalCalibration();
+    const baseStep = Math.max(this.options.minStake * 2, this.options.seed * this.options.profitGatePercent);
+    if (!calibration.compact) return roundMoney(baseStep);
+
+    const gapStep = Math.max(this.options.minStake * 2, calibration.gap * calibration.profitGateGapFraction);
+    return roundMoney(Math.min(baseStep, gapStep));
+  }
+
+  profitPushState(confidenceGate = this.confidenceGateState()) {
+    const calibration = this.goalCalibration();
+    const progress = this.progressRatio();
+    const debt = this.currentRecoveryDebt();
+    const phaseBlocked = [PHASES.MARTINGALE, PHASES.REBUILD, PHASES.STOPPED].includes(this.phase);
+    const confidenceBlocked = Boolean(confidenceGate.locked && confidenceGate.progress > 0);
+    const armed =
+      calibration.compact &&
+      !phaseBlocked &&
+      !confidenceBlocked &&
+      !this.splitRecoveryArmed &&
+      debt <= 0 &&
+      this.balance < this.options.target &&
+      progress >= calibration.profitPushStartRatio;
+
+    let reason = 'standard_goal';
+    if (!calibration.compact) {
+      reason = 'standard_goal';
+    } else if (phaseBlocked) {
+      reason = 'phase_blocked';
+    } else if (confidenceBlocked) {
+      reason = 'confidence_blocked';
+    } else if (this.splitRecoveryArmed || debt > 0) {
+      reason = 'recovery_blocked';
+    } else if (this.balance >= this.options.target) {
+      reason = 'target_reached';
+    } else if (progress < calibration.profitPushStartRatio) {
+      reason = 'progress_wait';
+    } else {
+      reason = 'armed';
+    }
+
+    return {
+      armed,
+      reason,
+      progress,
+      startRatio: calibration.profitPushStartRatio,
+      stake: this.profitPushStake(calibration),
+      capPercent: calibration.profitPushCapPercent,
+      gapFraction: calibration.profitPushGapFraction,
+      stakeMultiplier: calibration.profitPushStakeMultiplier,
+      winRatio: calibration.estimatedWinProfitRatio
+    };
+  }
+
+  profitPushStake(calibration = this.goalCalibration()) {
+    const balance = Math.max(this.options.minStake, this.balance);
+    const remainingGap = Math.max(0, this.options.target - this.effectiveGrowthBalance());
+    const targetProfit = Math.max(this.options.minStake * 0.2, remainingGap * calibration.profitPushGapFraction);
+    const projectedStake = targetProfit / calibration.estimatedWinProfitRatio;
+    const growthStake = this.growthStake();
+    const rawStake = Math.max(growthStake * calibration.profitPushStakeMultiplier, projectedStake);
+    const floorCapPercent = Math.min(1, growthStake / balance);
+    const capPercent = Math.max(calibration.profitPushCapPercent, floorCapPercent);
+    return this.normalizeStake(rawStake, capPercent);
   }
 
   recoveryStake() {
@@ -893,7 +994,7 @@ class DerivDigitBot extends EventEmitter {
     const confidenceGate = this.confidenceGateState();
     const debt = this.currentRecoveryDebt();
     const targetProfit = Math.max(this.options.minStake, debt * (1 + this.options.recoveryBufferPercent));
-    const winRatio = Math.max(0.01, this.lastWinProfitRatio || 0.95);
+    const winRatio = calibration.estimatedWinProfitRatio;
     const projectedStake = (targetProfit / winRatio) * (confidenceGate.locked ? 0.9 : 1);
     const balanceCap = Math.max(this.options.minStake, this.balance * calibration.recoveryCapPercent);
     const gapCap = Math.max(this.options.minStake, Math.max(0, this.options.target - this.effectiveGrowthBalance()) * calibration.recoveryGapFraction);
@@ -928,7 +1029,7 @@ class DerivDigitBot extends EventEmitter {
       this.options.minStake,
       (debt * (1 + this.options.recoveryBufferPercent)) / piecesRemaining
     );
-    const winRatio = Math.max(0.01, this.lastWinProfitRatio || 0.95);
+    const winRatio = calibration.estimatedWinProfitRatio;
     const projectedStake = targetProfit / winRatio;
     const balanceCap = Math.max(this.options.minStake, this.balance * calibration.splitRecoveryCapPercent);
     const gapCap = Math.max(this.options.minStake, Math.max(0, this.options.target - this.effectiveGrowthBalance()) * calibration.splitRecoveryGapFraction);
@@ -1245,6 +1346,15 @@ class DerivDigitBot extends EventEmitter {
       };
     }
 
+    const profitPush = this.profitPushState(confidenceGate);
+    if (profitPush.armed) {
+      return {
+        kind: 'profit_push',
+        stake: profitPush.stake,
+        profitPush
+      };
+    }
+
     const sniperState = this.blindSniperState(confidenceGate);
 
     if (sniperState.armed) {
@@ -1276,6 +1386,19 @@ class DerivDigitBot extends EventEmitter {
         'recovery_delay',
         `Martingale paused after ${calibration.martingaleRetryLimit} attempt(s). Waiting ${splitRecoveryState.waitTrades} more trade(s) before the next split recovery strike.`,
         { plan: { kind: 'split_recovery' } }
+      );
+    }
+
+    if (
+      profitPush.reason === 'progress_wait' &&
+      calibration.compact &&
+      this.phase === PHASES.GROWTH &&
+      this.currentRecoveryDebt() <= 0
+    ) {
+      this.emitAnalysis(
+        'profit_push_waiting',
+        `Compact target mode: profit push arms at ${Math.round(profitPush.startRatio * 100)}% progress. Until then the bot keeps grinding with growth stakes.`,
+        { plan: { kind: 'profit_push' } }
       );
     }
 
@@ -1459,6 +1582,7 @@ class DerivDigitBot extends EventEmitter {
     this.balance = roundMoney(this.balance + result.profit);
     const confidenceGate = this.confidenceGateState();
     const sniperState = this.blindSniperState(confidenceGate);
+    const profitPushState = this.profitPushState(confidenceGate);
     const calibration = this.goalCalibration();
 
     const tradeEvent = {
@@ -1486,6 +1610,13 @@ class DerivDigitBot extends EventEmitter {
       goalMode: calibration.label,
       goalGap: calibration.gap,
       goalGapRatio: calibration.gapRatio,
+      profitAggression: this.options.profitAggression,
+      profitPushArmed: profitPushState.armed,
+      profitPushReason: profitPushState.reason,
+      profitPushStake: profitPushState.stake,
+      profitPushStartRatio: profitPushState.startRatio,
+      profitPushCapPercent: profitPushState.capPercent,
+      estimatedWinProfitRatio: calibration.estimatedWinProfitRatio,
       growthStairsEnabled: this.options.growthStairsEnabled,
       initialStake: this.options.initialStake,
       initialStakeUsed: this.initialStakeUsed,
@@ -1533,7 +1664,9 @@ class DerivDigitBot extends EventEmitter {
       `session_balance=${tradeEvent.effectiveGrowthBalance.toFixed(2)} overlay=${tradeEvent.sniperOverlayNet.toFixed(2)} ` +
       `growth_floor=${tradeEvent.growthFloor.toFixed(2)} floor=${this.riskFloor.toFixed(2)} debt=${this.currentRecoveryDebt().toFixed(2)} ` +
       `goal_mode=${tradeEvent.goalMode} ` +
+      `aggression=${tradeEvent.profitAggression}/5 ` +
       `confidence_gate=${tradeEvent.confidenceGateLocked ? 'on' : 'off'} ` +
+      `profit_push=${tradeEvent.profitPushArmed ? 'armed' : tradeEvent.profitPushReason} ` +
       `risky_pct=${tradeEvent.riskyStakePercent ? (tradeEvent.riskyStakePercent * 100).toFixed(1) : 'n/a'} ` +
       `martingale_streak=${this.martingaleLossStreak} ` +
       `split_recovery=${this.splitRecoveryArmed ? 'on' : 'off'} ` +
@@ -1739,6 +1872,7 @@ class DerivDigitBot extends EventEmitter {
 
   phasePayload(previous, nextPhase, reason) {
     const sniperState = this.blindSniperState();
+    const profitPushState = this.profitPushState();
     const calibration = this.goalCalibration();
     return {
       time: new Date().toISOString(),
@@ -1790,6 +1924,13 @@ class DerivDigitBot extends EventEmitter {
       goalMode: calibration.label,
       goalGap: calibration.gap,
       goalGapRatio: calibration.gapRatio,
+      profitAggression: this.options.profitAggression,
+      profitPushArmed: profitPushState.armed,
+      profitPushReason: profitPushState.reason,
+      profitPushStake: profitPushState.stake,
+      profitPushStartRatio: profitPushState.startRatio,
+      profitPushCapPercent: profitPushState.capPercent,
+      estimatedWinProfitRatio: calibration.estimatedWinProfitRatio,
       seed: this.options.seed,
       target: this.options.target
     };
@@ -1797,6 +1938,7 @@ class DerivDigitBot extends EventEmitter {
 
   emitBalance() {
     const sniperState = this.blindSniperState();
+    const profitPushState = this.profitPushState();
     const calibration = this.goalCalibration();
     this.emit('balance_update', {
       balance: this.balance,
@@ -1853,6 +1995,13 @@ class DerivDigitBot extends EventEmitter {
       goalMode: calibration.label,
       goalGap: calibration.gap,
       goalGapRatio: calibration.gapRatio,
+      profitAggression: this.options.profitAggression,
+      profitPushArmed: profitPushState.armed,
+      profitPushReason: profitPushState.reason,
+      profitPushStake: profitPushState.stake,
+      profitPushStartRatio: profitPushState.startRatio,
+      profitPushCapPercent: profitPushState.capPercent,
+      estimatedWinProfitRatio: calibration.estimatedWinProfitRatio,
       tradeCooldownUntil: this.tradeCooldownUntil,
       tradeCooldownReason: this.tradeCooldownReason,
       tradeCooldownDetail: this.tradeCooldownDetail
@@ -1923,6 +2072,7 @@ class DerivDigitBot extends EventEmitter {
 
   snapshot() {
     const sniperState = this.blindSniperState();
+    const profitPushState = this.profitPushState();
     const calibration = this.goalCalibration();
     return {
       startedAt: this.startedAt ? this.startedAt.toISOString() : null,
@@ -1971,6 +2121,13 @@ class DerivDigitBot extends EventEmitter {
       goalMode: calibration.label,
       goalGap: calibration.gap,
       goalGapRatio: calibration.gapRatio,
+      profitAggression: this.options.profitAggression,
+      profitPushArmed: profitPushState.armed,
+      profitPushReason: profitPushState.reason,
+      profitPushStake: profitPushState.stake,
+      profitPushStartRatio: profitPushState.startRatio,
+      profitPushCapPercent: profitPushState.capPercent,
+      estimatedWinProfitRatio: calibration.estimatedWinProfitRatio,
       tradeCooldownUntil: this.tradeCooldownUntil,
       tradeCooldownReason: this.tradeCooldownReason,
       tradeCooldownDetail: this.tradeCooldownDetail,
@@ -2011,6 +2168,7 @@ class DerivDigitBot extends EventEmitter {
     this.lastWinProfitRatio = toNumber(snapshot.lastWinProfitRatio, this.lastWinProfitRatio);
     this.lastPipSize = toNumber(snapshot.lastPipSize, this.lastPipSize);
     this.growthAnchorBalance = roundMoney(toNumber(snapshot.growthAnchorBalance, this.growthAnchorBalance));
+    this.options.profitAggression = clamp(toNumber(snapshot.profitAggression, this.options.profitAggression), 1, 5);
     this.options.growthStairsEnabled = Boolean(snapshot.growthStairsEnabled ?? this.options.growthStairsEnabled);
     this.options.initialStake = toOptionalNumber(snapshot.initialStake, this.options.initialStake);
     this.initialStakeUsed = Boolean(snapshot.initialStakeUsed ?? this.initialStakeUsed);
@@ -2078,6 +2236,7 @@ class DerivDigitBot extends EventEmitter {
   summary(reason) {
     const confidenceGate = this.confidenceGateState();
     const sniperState = this.blindSniperState(confidenceGate);
+    const profitPushState = this.profitPushState(confidenceGate);
     const calibration = this.goalCalibration();
     return {
       reason,
@@ -2109,6 +2268,13 @@ class DerivDigitBot extends EventEmitter {
       goalMode: calibration.label,
       goalGap: calibration.gap,
       goalGapRatio: calibration.gapRatio,
+      profitAggression: this.options.profitAggression,
+      profitPushArmed: profitPushState.armed,
+      profitPushReason: profitPushState.reason,
+      profitPushStake: profitPushState.stake,
+      profitPushStartRatio: profitPushState.startRatio,
+      profitPushCapPercent: profitPushState.capPercent,
+      estimatedWinProfitRatio: calibration.estimatedWinProfitRatio,
       tradeCooldownUntil: this.tradeCooldownUntil,
       tradeCooldownReason: this.tradeCooldownReason,
       tradeCooldownDetail: this.tradeCooldownDetail,

@@ -187,6 +187,20 @@
       margin-top: -2px;
     }
 
+    .range-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .range-head strong {
+      color: var(--cyan);
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
     details.foldout {
       border-top: 1px solid var(--line);
       padding-top: 12px;
@@ -268,6 +282,14 @@
     input:focus,
     select:focus {
       border-color: var(--cyan);
+    }
+
+    input[type="range"] {
+      min-height: 28px;
+      padding: 0;
+      accent-color: var(--cyan);
+      border: 0;
+      background: transparent;
     }
 
     .inline {
@@ -942,6 +964,15 @@
               <div class="field-help">Used for the first growth trade and kept as the minimum growth stake for the run. Leave blank and the bot will use the normal base stake.</div>
             </div>
 
+            <div class="field">
+              <div class="range-head">
+                <label for="profitAggression">Profit aggression</label>
+                <strong id="profitAggressionValue">2/5</strong>
+              </div>
+              <input id="profitAggression" type="range" min="1" max="5" step="1" value="2">
+              <div class="field-help">For compact targets, higher values start profit-push trades earlier and let the bot press harder while still respecting recovery and confidence gates.</div>
+            </div>
+
             <div class="switch-row">
               <label for="blindSniper" title="The bot can fire up to 3 blind sniper shots at the configured progress marks.">Blind sniper</label>
               <input id="blindSniper" type="checkbox">
@@ -991,6 +1022,7 @@
             <span id="recoveryDebtText">Recovery debt $0.00</span>
             <span id="gateStepText">Gate step $0.00</span>
             <span id="goalModeText">Goal mode standard</span>
+            <span id="aggressionText">Aggression 2/5</span>
             <span id="recoveryText">Recovery split off</span>
             <span id="stairsText">Growth stairs off</span>
             <span id="growthTierText">Growth tier 0</span>
@@ -1097,6 +1129,8 @@
       strictBars: document.getElementById('strictBars'),
       growthStairs: document.getElementById('growthStairs'),
       initialStake: document.getElementById('initialStake'),
+      profitAggression: document.getElementById('profitAggression'),
+      profitAggressionValue: document.getElementById('profitAggressionValue'),
       blindSniper: document.getElementById('blindSniper'),
       blindSniperMarks: document.getElementById('blindSniperMarks'),
       startBtn: document.getElementById('startBtn'),
@@ -1126,6 +1160,7 @@
       recoveryDebtText: document.getElementById('recoveryDebtText'),
       gateStepText: document.getElementById('gateStepText'),
       goalModeText: document.getElementById('goalModeText'),
+      aggressionText: document.getElementById('aggressionText'),
       recoveryText: document.getElementById('recoveryText'),
       stairsText: document.getElementById('stairsText'),
       growthTierText: document.getElementById('growthTierText'),
@@ -1155,6 +1190,7 @@
     let currentWindowSize = 20;
     let currentMinStake = 0.35;
     let currentProfitGatePercent = 0.08;
+    let currentProfitAggression = 2;
     let currentBlindSniperCadenceTrades = 3;
     let currentBlindSniperMaxUses = 3;
     let currentBlindSniperStartRatio = 0.75;
@@ -1194,6 +1230,27 @@
       const amount = Number(value || 0);
       const prefix = amount >= 0 ? '+' : '-';
       return `${prefix}${money(Math.abs(amount))}`;
+    }
+
+    function clampNumber(value, min, max) {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) return min;
+      return Math.min(Math.max(numeric, min), max);
+    }
+
+    function profitAggressionRatio(value) {
+      return (clampNumber(value, 1, 5) - 1) / 4;
+    }
+
+    function previewGateStep(seed, target, aggression = currentProfitAggression) {
+      const resolvedSeed = Math.max(currentMinStake, Number(seed || currentSeed || 10));
+      const resolvedTarget = Math.max(resolvedSeed + currentMinStake, Number(target || currentTarget || resolvedSeed + 40));
+      const gap = Math.max(0, resolvedTarget - resolvedSeed);
+      const gapRatio = gap / Math.max(0.01, resolvedSeed);
+      const baseStep = Math.max(currentMinStake * 2, resolvedSeed * currentProfitGatePercent);
+      if (gapRatio > 0.25) return baseStep;
+      const fraction = 0.62 - profitAggressionRatio(aggression) * 0.22;
+      return Math.min(baseStep, Math.max(currentMinStake * 2, gap * fraction));
     }
 
     function phaseName(value) {
@@ -1322,6 +1379,7 @@
         strictBars: Boolean(el.strictBars.checked),
         growthStairsEnabled: Boolean(el.growthStairs.checked),
         initialStake: optionalInputValue(el.initialStake.value),
+        profitAggression: clampNumber(el.profitAggression.value, 1, 5),
         blindSniperEnabled: Boolean(el.blindSniper.checked),
         blindSniperMarks: normalizeMilestoneList(el.blindSniperMarks.value || currentBlindSniperMilestones, currentBlindSniperMilestones)
       };
@@ -1354,6 +1412,9 @@
       if (Object.prototype.hasOwnProperty.call(values, 'initialStake')) {
         el.initialStake.value = optionalInputValue(values.initialStake);
       }
+      if (Object.prototype.hasOwnProperty.call(values, 'profitAggression')) {
+        el.profitAggression.value = clampNumber(values.profitAggression, 1, 5);
+      }
       if (Object.prototype.hasOwnProperty.call(values, 'blindSniperEnabled')) {
         el.blindSniper.checked = Boolean(values.blindSniperEnabled);
       }
@@ -1371,6 +1432,9 @@
       currentTarget = roundInputNumber(el.target.value, currentTarget);
       currentGrowthStairsEnabled = Boolean(el.growthStairs.checked);
       currentInitialStake = parseOptionalNumber(el.initialStake.value, null);
+      currentProfitAggression = clampNumber(el.profitAggression.value, 1, 5);
+      el.profitAggression.value = currentProfitAggression;
+      el.profitAggressionValue.textContent = `${currentProfitAggression}/5`;
       currentBlindSniperMilestones = normalizeMilestoneList(
         el.blindSniperMarks.value || currentBlindSniperMilestones,
         currentBlindSniperMilestones
@@ -1379,7 +1443,8 @@
       currentSavedDefaults = readSavedDefaults();
       updateDefaultsState();
       resetEquityTrail();
-      el.gateStepText.textContent = `Gate step ${money(Math.max(currentMinStake * 2, currentSeed * currentProfitGatePercent))}`;
+      el.gateStepText.textContent = `Gate step ${money(previewGateStep(currentSeed, currentTarget, currentProfitAggression))}`;
+      el.aggressionText.textContent = `Aggression ${currentProfitAggression}/5`;
       el.growthFloorText.textContent = `Growth floor ${money(currentMinStake)}`;
     }
 
@@ -1804,6 +1869,7 @@
       const phase = String(snapshot.phase || run.phase || 'growth');
       const growthStairsEnabled = Boolean(snapshot.growthStairsEnabled ?? run.growthStairsEnabled ?? config.growthStairsEnabled ?? false);
       const initialStake = snapshot.initialStake ?? run.initialStake ?? config.initialStake ?? null;
+      const profitAggression = clampNumber(snapshot.profitAggression ?? run.profitAggression ?? config.profitAggression ?? currentProfitAggression, 1, 5);
       const blindSniperEnabled = Boolean(snapshot.blindSniperEnabled ?? run.blindSniperEnabled ?? config.blindSniperEnabled ?? false);
       const blindSniperUses = Number(snapshot.blindSniperUses ?? run.blindSniperUses ?? config.blindSniperUses ?? 0);
       const blindSniperCadenceTrades = Number(snapshot.blindSniperCadenceTrades ?? run.blindSniperCadenceTrades ?? config.blindSniperCadenceTrades ?? 3);
@@ -1880,6 +1946,7 @@
       currentBlindSniperStakeFraction = blindSniperStakeFraction;
       currentGrowthStairsEnabled = growthStairsEnabled;
       currentInitialStake = initialStake;
+      currentProfitAggression = profitAggression;
 
       currentSeed = seed;
       currentTarget = target;
@@ -1889,6 +1956,8 @@
       if (run.accountId) el.accountId.value = run.accountId;
       el.growthStairs.checked = growthStairsEnabled;
       el.initialStake.value = optionalInputValue(initialStake);
+      el.profitAggression.value = profitAggression;
+      el.profitAggressionValue.textContent = `${profitAggression}/5`;
       el.blindSniperMarks.value = formatMilestoneList(blindSniperMilestones);
 
       resetEquityTrail();
@@ -1911,9 +1980,15 @@
         growthTier: Number(snapshot.growthTier ?? run.growthTier ?? 0),
         growthStep: Number(snapshot.growthStep ?? run.growthStep ?? 0),
         growthFloor: Number(snapshot.growthFloor ?? run.growthFloor ?? currentMinStake),
-        gateStep: Number(snapshot.gateStep ?? run.gateStep ?? Math.max(currentMinStake * 2, seed * currentProfitGatePercent)),
+        gateStep: Number(snapshot.gateStep ?? run.gateStep ?? previewGateStep(seed, target, profitAggression)),
         growthStairsEnabled,
         initialStake,
+        profitAggression,
+        profitPushArmed: Boolean(snapshot.profitPushArmed ?? run.profitPushArmed ?? false),
+        profitPushReason: snapshot.profitPushReason ?? run.profitPushReason ?? null,
+        profitPushStake: Number(snapshot.profitPushStake ?? run.profitPushStake ?? 0),
+        profitPushStartRatio: Number(snapshot.profitPushStartRatio ?? run.profitPushStartRatio ?? 0),
+        profitPushCapPercent: Number(snapshot.profitPushCapPercent ?? run.profitPushCapPercent ?? 0),
         martingaleLossStreak: Number(snapshot.martingaleLossStreak ?? run.martingaleLossStreak ?? 0),
         martingaleRetryLimit: Number(snapshot.martingaleRetryLimit ?? run.martingaleRetryLimit ?? 2),
         splitRecoveryArmed: Boolean(snapshot.splitRecoveryArmed ?? run.splitRecoveryArmed ?? false),
@@ -1968,12 +2043,16 @@
       if (run.accountId) el.accountId.value = run.accountId;
       const growthStairsEnabled = Boolean(snapshot.growthStairsEnabled ?? run.growthStairsEnabled ?? run.config?.growthStairsEnabled ?? false);
       const initialStake = snapshot.initialStake ?? run.initialStake ?? run.config?.initialStake ?? null;
+      const profitAggression = clampNumber(snapshot.profitAggression ?? run.profitAggression ?? run.config?.profitAggression ?? currentProfitAggression, 1, 5);
       const blindSniperMilestones = normalizeMilestoneList(
         snapshot.blindSniperMilestones ?? run.blindSniperMilestones ?? run.config?.blindSniperMilestones ?? null,
         [0.25, 0.5, Number(snapshot.blindSniperStartRatio ?? run.blindSniperStartRatio ?? run.config?.blindSniperStartRatio ?? 0.75)]
       );
+      currentProfitAggression = profitAggression;
       el.growthStairs.checked = growthStairsEnabled;
       el.initialStake.value = optionalInputValue(initialStake);
+      el.profitAggression.value = profitAggression;
+      el.profitAggressionValue.textContent = `${profitAggression}/5`;
       el.blindSniperMarks.value = formatMilestoneList(blindSniperMilestones);
       if (run.config && run.config.blindSniperEnabled !== undefined) {
         el.blindSniper.checked = Boolean(run.config.blindSniperEnabled);
@@ -2062,7 +2141,8 @@
       el.progressText.textContent = '0.0%';
       el.gateFloorText.textContent = `Protected floor ${money(currentSeed)}`;
       el.recoveryDebtText.textContent = 'Recovery debt $0.00';
-      el.gateStepText.textContent = `Gate step ${money(Math.max(currentMinStake * 2, currentSeed * currentProfitGatePercent))}`;
+      el.gateStepText.textContent = `Gate step ${money(previewGateStep(currentSeed, currentTarget, currentProfitAggression))}`;
+      el.aggressionText.textContent = `Aggression ${currentProfitAggression}/5`;
       el.recoveryText.textContent = 'Recovery split off';
       el.stairsText.textContent = currentGrowthStairsEnabled ? 'Growth stairs on' : 'Growth stairs off';
       el.growthTierText.textContent = 'Growth tier 0';
@@ -2221,9 +2301,16 @@
       currentTarget = target;
       const gateFloor = Number(event.riskFloor || seed);
       const recoveryDebt = Number(event.recoveryDebt || 0);
-      const gateStep = Number(event.gateStep || 0);
+      const profitAggression = clampNumber(event.profitAggression ?? currentProfitAggression, 1, 5);
+      const gateStep = Number.isFinite(Number(event.gateStep)) && Number(event.gateStep) > 0
+        ? Number(event.gateStep)
+        : previewGateStep(seed, target, profitAggression);
       const growthTier = Number(event.growthTier || 0);
       const growthFloor = Number(event.growthFloor || currentMinStake);
+      const profitPushArmed = Boolean(event.profitPushArmed);
+      const profitPushReason = String(event.profitPushReason || '');
+      const profitPushStake = Number(event.profitPushStake || 0);
+      const profitPushStartRatio = Number(event.profitPushStartRatio || 0);
       const growthStairsEnabled = Boolean(event.growthStairsEnabled ?? currentGrowthStairsEnabled);
       const initialStake = event.initialStake ?? currentInitialStake;
       const martingaleLossStreak = Number(event.martingaleLossStreak || 0);
@@ -2251,6 +2338,9 @@
       el.goalModeText.textContent = goalModeText;
       el.paceText.textContent = paceText;
 
+      currentProfitAggression = profitAggression;
+      el.profitAggression.value = profitAggression;
+      el.profitAggressionValue.textContent = `${profitAggression}/5`;
       currentGrowthStairsEnabled = growthStairsEnabled;
       currentInitialStake = initialStake;
       if (Number.isFinite(Number(event.blindSniperCadenceTrades))) {
@@ -2313,6 +2403,16 @@
           ? `Martingale retry ${martingaleLossStreak}/${martingaleRetryLimit}`
           : 'Recovery split off';
       el.stairsText.textContent = growthStairsEnabled ? 'Growth stairs on' : 'Growth stairs off';
+      const profitPushText = profitPushArmed
+        ? `Profit push armed at ${money(profitPushStake)}`
+        : profitPushReason === 'confidence_blocked'
+          ? 'Profit push waiting on win rate'
+          : profitPushReason === 'recovery_blocked'
+            ? 'Profit push waiting for recovery'
+            : profitPushReason === 'progress_wait'
+              ? `Profit push waits for ${Math.round(profitPushStartRatio * 100)}%`
+              : 'Profit push idle';
+      el.aggressionText.textContent = `Aggression ${profitAggression}/5 - ${profitPushText}`;
 
       if (source !== 'trade') {
         el.gateFloorText.textContent = `Protected floor ${money(gateFloor)}`;
@@ -2350,6 +2450,7 @@
       viewRows = [];
       currentSeed = Number(el.seed.value);
       currentTarget = Number(el.target.value);
+      currentProfitAggression = clampNumber(el.profitAggression.value, 1, 5);
       const startBlindSniperMilestones = normalizeMilestoneList(el.blindSniperMarks.value || currentBlindSniperMilestones, currentBlindSniperMilestones);
       currentBlindSniperMilestones = startBlindSniperMilestones;
       currentBlindSniperStartRatio = startBlindSniperMilestones[startBlindSniperMilestones.length - 1] ?? currentBlindSniperStartRatio;
@@ -2363,6 +2464,7 @@
         winRate: 0,
         growthStairsEnabled: el.growthStairs.checked,
         initialStake: el.initialStake.value === '' ? null : Number(el.initialStake.value),
+        profitAggression: currentProfitAggression,
         martingaleLossStreak: 0,
         martingaleRetryLimit: 2,
         splitRecoveryArmed: false,
@@ -2395,6 +2497,7 @@
         strictBarFilters: el.strictBars.checked,
         growthStairsEnabled: el.growthStairs.checked,
         initialStake: el.initialStake.value,
+        profitAggression: currentProfitAggression,
         blindSniperEnabled: el.blindSniper.checked,
         blindSniperMilestones: el.blindSniperMarks.value
       }, (response) => {
@@ -2466,6 +2569,10 @@
       showBanner('success', 'Restored actual defaults.');
     });
 
+    el.profitAggression.addEventListener('input', () => {
+      syncConfigPreviewFromControls();
+    });
+
     socket.on('config', (config) => {
       if (config.defaultMode) el.mode.value = config.defaultMode;
       if (Number.isFinite(Number(config.windowSize))) {
@@ -2477,6 +2584,11 @@
       if (Number.isFinite(Number(config.profitGatePercent))) {
         currentProfitGatePercent = Number(config.profitGatePercent);
       }
+      if (Number.isFinite(Number(config.profitAggression))) {
+        currentProfitAggression = clampNumber(config.profitAggression, 1, 5);
+      }
+      el.profitAggression.value = currentProfitAggression;
+      el.profitAggressionValue.textContent = `${currentProfitAggression}/5`;
       currentGrowthStairsEnabled = Boolean(config.growthStairsEnabled);
       el.growthStairs.checked = currentGrowthStairsEnabled;
       currentInitialStake = parseOptionalNumber(config.initialStake, null);
@@ -2508,7 +2620,7 @@
         applyDefaultsToControls(currentSavedDefaults, { sync: false });
       }
       syncConfigPreviewFromControls();
-      el.gateStepText.textContent = `Gate step ${money(Math.max(currentMinStake * 2, currentSeed * currentProfitGatePercent))}`;
+      el.gateStepText.textContent = `Gate step ${money(previewGateStep(currentSeed, currentTarget, currentProfitAggression))}`;
       el.growthFloorText.textContent = `Growth floor ${money(currentMinStake)}`;
       if (config.hasEnvToken) {
         el.tokenHelp.innerHTML = 'A Deriv authorization token is loaded from <code>.env</code>. Use the mode switch to choose the account type, and fill <em>Account ID</em> only if you want to pin a specific account.';
@@ -2604,11 +2716,12 @@
     socket.on('trade', (event) => {
       appendAndUpdate(event, 'trade');
       updateStats({
+        ...event,
         balance: event.balance,
         seed: currentSeed,
         target: currentTarget,
         phase: event.phase,
-        totalTrades: (lastRenderedTrades || 0) + 1,
+        totalTrades: event.totalTrades ?? (lastRenderedTrades || 0) + 1,
         winRate: event.winRate,
         result: event.result,
         condition: event.condition,

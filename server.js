@@ -56,6 +56,10 @@ function numberFrom(value, fallback) {
   return Number.isFinite(numeric) ? numeric : fallback;
 }
 
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
 function optionalNumberFrom(value, fallback = null) {
   if (value === undefined || value === null || value === '') return fallback;
   const numeric = Number(value);
@@ -149,6 +153,7 @@ function publicConfig() {
     growthStakeBumpPercent: numberFrom(process.env.GROWTH_STAKE_BUMP_PERCENT, 0.15),
     growthStakeCapPercent: numberFrom(process.env.GROWTH_STAKE_CAP_PERCENT, 0.12),
     profitGatePercent: numberFrom(process.env.PROFIT_GATE_PERCENT, 0.08),
+    profitAggression: clamp(numberFrom(process.env.PROFIT_AGGRESSION, 2), 1, 5),
     recoveryBufferPercent: numberFrom(process.env.RECOVERY_BUFFER_PERCENT, 0.05),
     growthStairsEnabled: boolFrom(process.env.GROWTH_STAIRS_ENABLED, false),
     initialStake: optionalNumberFrom(process.env.INITIAL_STAKE, null),
@@ -227,6 +232,7 @@ function sanitizeStartPayload(payload = {}) {
     growthStakeBumpPercent: numberFrom(process.env.GROWTH_STAKE_BUMP_PERCENT, 0.15),
     growthStakeCapPercent: numberFrom(process.env.GROWTH_STAKE_CAP_PERCENT, 0.12),
     profitGatePercent: numberFrom(process.env.PROFIT_GATE_PERCENT, 0.08),
+    profitAggression: clamp(numberFrom(payload.profitAggression, numberFrom(process.env.PROFIT_AGGRESSION, 2)), 1, 5),
     recoveryBufferPercent: numberFrom(process.env.RECOVERY_BUFFER_PERCENT, 0.05),
     growthStairsEnabled: boolFrom(payload.growthStairsEnabled, boolFrom(process.env.GROWTH_STAIRS_ENABLED, false)),
     initialStake: optionalNumberFrom(payload.initialStake, optionalNumberFrom(process.env.INITIAL_STAKE, null)),
@@ -284,6 +290,13 @@ function summarizeRun(run, reason = run?.reason || 'manual') {
     goalMode: snapshot.goalMode ?? run.goalMode ?? calibration.label,
     goalGap: Number(snapshot.goalGap ?? run.goalGap ?? calibration.gap),
     goalGapRatio: Number(snapshot.goalGapRatio ?? run.goalGapRatio ?? calibration.gapRatio),
+    profitAggression: Number(snapshot.profitAggression ?? run.profitAggression ?? run.config?.profitAggression ?? 2),
+    profitPushArmed: Boolean(snapshot.profitPushArmed ?? run.profitPushArmed ?? false),
+    profitPushReason: snapshot.profitPushReason ?? run.profitPushReason ?? null,
+    profitPushStake: Number(snapshot.profitPushStake ?? run.profitPushStake ?? 0),
+    profitPushStartRatio: Number(snapshot.profitPushStartRatio ?? run.profitPushStartRatio ?? 0),
+    profitPushCapPercent: Number(snapshot.profitPushCapPercent ?? run.profitPushCapPercent ?? 0),
+    estimatedWinProfitRatio: Number(snapshot.estimatedWinProfitRatio ?? run.estimatedWinProfitRatio ?? snapshot.lastWinProfitRatio ?? 0.22),
     tradeCooldownUntil: Number(snapshot.tradeCooldownUntil ?? run.tradeCooldownUntil ?? 0),
     tradeCooldownReason: snapshot.tradeCooldownReason ?? run.tradeCooldownReason ?? null,
     tradeCooldownDetail: snapshot.tradeCooldownDetail ?? run.tradeCooldownDetail ?? null,
@@ -344,6 +357,13 @@ function buildRunPatch(bot, runDoc, extra = {}) {
     goalMode: snapshot?.goalMode ?? runDoc?.goalMode ?? calibration.label,
     goalGap: Number(snapshot?.goalGap ?? runDoc?.goalGap ?? calibration.gap),
     goalGapRatio: Number(snapshot?.goalGapRatio ?? runDoc?.goalGapRatio ?? calibration.gapRatio),
+    profitAggression: Number(snapshot?.profitAggression ?? runDoc?.profitAggression ?? runDoc?.config?.profitAggression ?? 2),
+    profitPushArmed: Boolean(snapshot?.profitPushArmed ?? runDoc?.profitPushArmed ?? false),
+    profitPushReason: snapshot?.profitPushReason ?? runDoc?.profitPushReason ?? null,
+    profitPushStake: Number(snapshot?.profitPushStake ?? runDoc?.profitPushStake ?? 0),
+    profitPushStartRatio: Number(snapshot?.profitPushStartRatio ?? runDoc?.profitPushStartRatio ?? 0),
+    profitPushCapPercent: Number(snapshot?.profitPushCapPercent ?? runDoc?.profitPushCapPercent ?? 0),
+    estimatedWinProfitRatio: Number(snapshot?.estimatedWinProfitRatio ?? runDoc?.estimatedWinProfitRatio ?? snapshot?.lastWinProfitRatio ?? 0.22),
     tradeCooldownUntil: snapshot?.tradeCooldownUntil ?? runDoc?.tradeCooldownUntil ?? 0,
     tradeCooldownReason: snapshot?.tradeCooldownReason ?? runDoc?.tradeCooldownReason ?? null,
     tradeCooldownDetail: snapshot?.tradeCooldownDetail ?? runDoc?.tradeCooldownDetail ?? null,
@@ -482,6 +502,13 @@ function runBalanceState(run) {
     goalMode: snapshot.goalMode ?? run.goalMode ?? calibration.label,
     goalGap: Number(snapshot.goalGap ?? run.goalGap ?? calibration.gap),
     goalGapRatio: Number(snapshot.goalGapRatio ?? run.goalGapRatio ?? calibration.gapRatio),
+    profitAggression: Number(snapshot.profitAggression ?? run.profitAggression ?? run.config?.profitAggression ?? 2),
+    profitPushArmed: Boolean(snapshot.profitPushArmed ?? run.profitPushArmed ?? false),
+    profitPushReason: snapshot.profitPushReason ?? run.profitPushReason ?? null,
+    profitPushStake: Number(snapshot.profitPushStake ?? run.profitPushStake ?? 0),
+    profitPushStartRatio: Number(snapshot.profitPushStartRatio ?? run.profitPushStartRatio ?? 0),
+    profitPushCapPercent: Number(snapshot.profitPushCapPercent ?? run.profitPushCapPercent ?? 0),
+    estimatedWinProfitRatio: Number(snapshot.estimatedWinProfitRatio ?? run.estimatedWinProfitRatio ?? snapshot.lastWinProfitRatio ?? 0.22),
     tradeCooldownUntil: Number(snapshot.tradeCooldownUntil ?? run.tradeCooldownUntil ?? 0),
     tradeCooldownReason: snapshot.tradeCooldownReason ?? run.tradeCooldownReason ?? null,
     tradeCooldownDetail: snapshot.tradeCooldownDetail ?? run.tradeCooldownDetail ?? null,
@@ -663,7 +690,14 @@ function bindBot(bot) {
         growthTier: event.growthTier,
         growthStep: event.growthStep,
         growthFloor: event.growthFloor,
-        gateStep: event.gateStep
+        gateStep: event.gateStep,
+        profitAggression: event.profitAggression,
+        profitPushArmed: event.profitPushArmed,
+        profitPushReason: event.profitPushReason,
+        profitPushStake: event.profitPushStake,
+        profitPushStartRatio: event.profitPushStartRatio,
+        profitPushCapPercent: event.profitPushCapPercent,
+        estimatedWinProfitRatio: event.estimatedWinProfitRatio
       }
     }).catch((error) => {
       console.error('Failed to persist balance update:', error);
@@ -774,6 +808,13 @@ async function startFreshRun(payload = {}) {
     goalMode: initialSnapshot.goalMode,
     goalGap: initialSnapshot.goalGap,
     goalGapRatio: initialSnapshot.goalGapRatio,
+    profitAggression: initialSnapshot.profitAggression,
+    profitPushArmed: initialSnapshot.profitPushArmed,
+    profitPushReason: initialSnapshot.profitPushReason,
+    profitPushStake: initialSnapshot.profitPushStake,
+    profitPushStartRatio: initialSnapshot.profitPushStartRatio,
+    profitPushCapPercent: initialSnapshot.profitPushCapPercent,
+    estimatedWinProfitRatio: initialSnapshot.estimatedWinProfitRatio,
     tradeCooldownUntil: initialSnapshot.tradeCooldownUntil,
     tradeCooldownReason: initialSnapshot.tradeCooldownReason,
     tradeCooldownDetail: initialSnapshot.tradeCooldownDetail,
