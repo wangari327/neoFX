@@ -65,6 +65,7 @@ function mapRun(doc) {
     autoCyclePartialExitTradeThreshold: Number(doc.autoCyclePartialExitTradeThreshold ?? snapshot?.autoCyclePartialExitTradeThreshold ?? 60),
     autoCyclePartialExitProfitRatio: toNumberOrNull(doc.autoCyclePartialExitProfitRatio ?? snapshot?.autoCyclePartialExitProfitRatio),
     autoCycleRecycleTradeThreshold: Number(doc.autoCycleRecycleTradeThreshold ?? snapshot?.autoCycleRecycleTradeThreshold ?? 100),
+    autoCycleCooldownSeconds: Number(doc.autoCycleCooldownSeconds ?? snapshot?.autoCycleCooldownSeconds ?? 60),
     strategyTarget: toNumberOrNull(doc.strategyTarget ?? snapshot?.strategyTarget),
     eventCount: Number(doc.eventCount || 0),
     balance: toNumberOrNull(doc.balance ?? snapshot?.balance),

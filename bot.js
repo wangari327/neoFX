@@ -76,6 +76,7 @@ const AUTO_CYCLE_DEFAULT_STAKE_PERCENT = 0.05;
 const AUTO_CYCLE_PARTIAL_EXIT_TRADE_THRESHOLD = 60;
 const AUTO_CYCLE_PARTIAL_EXIT_PROFIT_RATIO = 0.5;
 const AUTO_CYCLE_RECYCLE_TRADE_THRESHOLD = 100;
+const AUTO_CYCLE_COOLDOWN_SECONDS = 60;
 const AUTO_CYCLE_MILESTONES = [0.25, 0.5];
 const GROWTH_STAIR_MODES = {
   OFF: 'off',
@@ -378,6 +379,7 @@ class DerivDigitBot extends EventEmitter {
       autoCyclePartialExitTradeThreshold: Math.max(1, Math.floor(toNumber(options.autoCyclePartialExitTradeThreshold, AUTO_CYCLE_PARTIAL_EXIT_TRADE_THRESHOLD))),
       autoCyclePartialExitProfitRatio: clamp(toNumber(options.autoCyclePartialExitProfitRatio, AUTO_CYCLE_PARTIAL_EXIT_PROFIT_RATIO), 0.1, 1),
       autoCycleRecycleTradeThreshold: Math.max(1, Math.floor(toNumber(options.autoCycleRecycleTradeThreshold, AUTO_CYCLE_RECYCLE_TRADE_THRESHOLD))),
+      autoCycleCooldownSeconds: Math.max(0, Math.floor(toNumber(options.autoCycleCooldownSeconds, AUTO_CYCLE_COOLDOWN_SECONDS))),
       autoRiskProfile: normalizeAutoRiskProfile(options.autoRiskProfile),
       autoReviewIntervalTrades: Math.max(1, Math.floor(toNumber(options.autoReviewIntervalTrades, 5))),
       targetSizingMode: normalizeTargetSizingMode(options.targetSizingMode ?? options.goalSizingMode),
@@ -436,6 +438,7 @@ class DerivDigitBot extends EventEmitter {
       autoCycleMode: this.options.autoCycleMode,
       autoCycleProfit: this.options.autoCycleProfit,
       autoCycleStake: this.options.autoCycleStake,
+      autoCycleCooldownSeconds: this.options.autoCycleCooldownSeconds,
       profitAggression: this.options.profitAggression,
       growthStairMode: this.options.growthStairMode,
       blindSniperEnabled: this.options.blindSniperEnabled,
@@ -497,9 +500,6 @@ class DerivDigitBot extends EventEmitter {
     this.paused = false;
     this.pauseRequested = false;
     this.pauseReason = 'manual';
-    this.tradeCooldownUntil = 0;
-    this.tradeCooldownReason = '';
-    this.tradeCooldownDetail = '';
     this.emergencyAllInUsed = false;
     this.emitStatus('starting');
 
@@ -852,6 +852,7 @@ class DerivDigitBot extends EventEmitter {
       autoCyclePartialExitTradeThreshold: this.options.autoCyclePartialExitTradeThreshold,
       autoCyclePartialExitProfitRatio: this.options.autoCyclePartialExitProfitRatio,
       autoCycleRecycleTradeThreshold: this.options.autoCycleRecycleTradeThreshold,
+      autoCycleCooldownSeconds: this.options.autoCycleCooldownSeconds,
       strategyTarget: this.strategyTarget(),
       overallProgressRatio: this.overallProgressRatio(),
       autoRiskProfile: this.options.autoRiskProfile,
@@ -1473,6 +1474,7 @@ class DerivDigitBot extends EventEmitter {
       autoCyclePartialExitTradeThreshold: this.options.autoCyclePartialExitTradeThreshold,
       autoCyclePartialExitProfitRatio: this.options.autoCyclePartialExitProfitRatio,
       autoCycleRecycleTradeThreshold: this.options.autoCycleRecycleTradeThreshold,
+      autoCycleCooldownSeconds: this.options.autoCycleCooldownSeconds,
       strategyTarget: this.strategyTarget(),
       overallProgressRatio: this.overallProgressRatio(),
       autoRiskProfile: this.options.autoRiskProfile,
@@ -1572,6 +1574,7 @@ class DerivDigitBot extends EventEmitter {
 
   planShouldWaitForThrottle(plan) {
     if (!plan || Date.now() >= this.tradeCooldownUntil) return false;
+    if (this.tradeCooldownReason === 'auto_cycle_cooldown') return true;
     return [
       PHASES.RISKY,
       PHASES.MARTINGALE,
@@ -1777,6 +1780,10 @@ class DerivDigitBot extends EventEmitter {
     return roundMoney(Math.max(this.options.minStake * 0.2, this.options.target - this.options.seed));
   }
 
+  autoCycleCooldownMs() {
+    return Math.max(0, Math.floor(this.options.autoCycleCooldownSeconds * 1000));
+  }
+
   strategyTarget() {
     return this.autoCycleModeEnabled()
       ? roundMoney(this.options.seed + this.autoCycleProfitTarget())
@@ -1926,8 +1933,17 @@ class DerivDigitBot extends EventEmitter {
         }
       }
     );
+    const targetReached = this.autoCycleBankedProfit >= this.autoCycleOverallProfitTarget();
+    if (!targetReached && this.autoCycleCooldownMs() > 0) {
+      const seconds = this.options.autoCycleCooldownSeconds;
+      this.setTradeCooldown(
+        this.autoCycleCooldownMs(),
+        'auto_cycle_cooldown',
+        `Auto-cycle boundary break active. Waiting ${seconds} second(s) before the next independent cycle.`
+      );
+    }
     this.emitBalance();
-    if (this.autoCycleBankedProfit >= this.autoCycleOverallProfitTarget()) {
+    if (targetReached) {
       void this.stop('take_profit');
     }
     return true;
@@ -2362,6 +2378,23 @@ class DerivDigitBot extends EventEmitter {
       this.emitAnalysis(
         'warming_up',
         `Warming up ${this.digits.length}/${this.options.windowSize}. The bot is still building the recent digit window.`,
+        { currentDigit: tick.digit }
+      );
+      return;
+    }
+
+    const now = Date.now();
+    if (this.tradeCooldownUntil > 0 && now >= this.tradeCooldownUntil) {
+      this.tradeCooldownUntil = 0;
+      this.tradeCooldownReason = '';
+      this.tradeCooldownDetail = '';
+    }
+
+    if (now < this.tradeCooldownUntil && this.tradeCooldownReason === 'auto_cycle_cooldown') {
+      const remainingSeconds = Math.max(1, Math.ceil((this.tradeCooldownUntil - now) / 1000));
+      this.emitAnalysis(
+        'auto_cycle_cooldown',
+        this.tradeCooldownDetail || `Cycle break active. Waiting ${remainingSeconds} second(s) before the next independent cycle.`,
         { currentDigit: tick.digit }
       );
       return;
@@ -2996,6 +3029,7 @@ class DerivDigitBot extends EventEmitter {
       autoCyclePartialExitTradeThreshold: this.options.autoCyclePartialExitTradeThreshold,
       autoCyclePartialExitProfitRatio: this.options.autoCyclePartialExitProfitRatio,
       autoCycleRecycleTradeThreshold: this.options.autoCycleRecycleTradeThreshold,
+      autoCycleCooldownSeconds: this.options.autoCycleCooldownSeconds,
       strategyTarget: this.strategyTarget(),
       overallProgressRatio: this.overallProgressRatio(),
       autoRiskProfile: this.options.autoRiskProfile,
@@ -3735,6 +3769,10 @@ class DerivDigitBot extends EventEmitter {
     this.options.autoCycleRecycleTradeThreshold = Math.max(
       1,
       Math.floor(toNumber(snapshot.autoCycleRecycleTradeThreshold, this.options.autoCycleRecycleTradeThreshold))
+    );
+    this.options.autoCycleCooldownSeconds = Math.max(
+      0,
+      Math.floor(toNumber(snapshot.autoCycleCooldownSeconds, this.options.autoCycleCooldownSeconds))
     );
     this.autoCycleBankedProfit = roundMoney(toNumber(snapshot.autoCycleBankedProfit, this.autoCycleBankedProfit));
     this.autoCycleCompleted = Math.max(0, Math.floor(toNumber(snapshot.autoCycleCompleted, this.autoCycleCompleted)));

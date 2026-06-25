@@ -1038,8 +1038,12 @@
                 <label for="autoCycleStake">Cycle stake</label>
                 <input id="autoCycleStake" type="number" min="0" step="0.01" placeholder="Auto">
               </div>
+              <div class="field">
+                <label for="autoCycleCooldownSeconds">Cycle cooldown</label>
+                <input id="autoCycleCooldownSeconds" type="number" min="0" step="1" value="60">
+              </div>
             </div>
-            <div class="field-help">Auto-cycle defaults to seed x 10% profit and seed x 5% stake. For $10 seed, that is a $1 cycle target and $0.50 stake floor.</div>
+            <div class="field-help">Auto-cycle defaults to seed x 10% profit, seed x 5% stake, and a 60 second break between independent cycles.</div>
 
             <div class="field">
               <label for="autoRiskProfile">Auto risk</label>
@@ -1304,6 +1308,7 @@
       autoCycleMode: document.getElementById('autoCycleMode'),
       autoCycleProfit: document.getElementById('autoCycleProfit'),
       autoCycleStake: document.getElementById('autoCycleStake'),
+      autoCycleCooldownSeconds: document.getElementById('autoCycleCooldownSeconds'),
       autoRiskProfile: document.getElementById('autoRiskProfile'),
       symbol: document.getElementById('symbol'),
       targetSizingMode: document.getElementById('targetSizingMode'),
@@ -1387,6 +1392,7 @@
     let currentAutoCycleMode = true;
     let currentAutoCycleProfit = null;
     let currentAutoCycleStake = null;
+    let currentAutoCycleCooldownSeconds = 60;
     let currentAutoRiskProfile = 'balanced';
     let currentWindowSize = 20;
     let currentMinStake = 0.35;
@@ -1734,6 +1740,7 @@
         autoCycleMode: Boolean(el.autoCycleMode.checked),
         autoCycleProfit: optionalInputValue(el.autoCycleProfit.value),
         autoCycleStake: optionalInputValue(el.autoCycleStake.value),
+        autoCycleCooldownSeconds: Math.max(0, Math.floor(Number(el.autoCycleCooldownSeconds.value || currentAutoCycleCooldownSeconds || 60))),
         autoRiskProfile: normalizeAutoRiskProfile(el.autoRiskProfile.value),
         symbol: normalizeSymbol(el.symbol.value),
         targetSizingMode: normalizeTargetSizingMode(el.targetSizingMode.value),
@@ -1772,6 +1779,9 @@
       }
       if (Object.prototype.hasOwnProperty.call(values, 'autoCycleStake')) {
         el.autoCycleStake.value = optionalInputValue(values.autoCycleStake);
+      }
+      if (Object.prototype.hasOwnProperty.call(values, 'autoCycleCooldownSeconds')) {
+        el.autoCycleCooldownSeconds.value = Math.max(0, Math.floor(Number(values.autoCycleCooldownSeconds || 0)));
       }
       if (Object.prototype.hasOwnProperty.call(values, 'autoRiskProfile')) {
         el.autoRiskProfile.value = normalizeAutoRiskProfile(values.autoRiskProfile);
@@ -1830,6 +1840,7 @@
       currentAutoCycleMode = Boolean(el.autoCycleMode.checked);
       currentAutoCycleProfit = parseOptionalNumber(el.autoCycleProfit.value, null);
       currentAutoCycleStake = parseOptionalNumber(el.autoCycleStake.value, null);
+      currentAutoCycleCooldownSeconds = Math.max(0, Math.floor(Number(el.autoCycleCooldownSeconds.value || currentAutoCycleCooldownSeconds || 60)));
       currentProgressTarget = currentAutoModeEnabled && currentAutoCycleMode
         ? currentSeed + (currentAutoCycleProfit || Math.max(currentMinStake * 2, currentSeed * 0.1))
         : currentTarget;
@@ -1994,11 +2005,17 @@
       if (reason === 'trade_failed' && event.tradeCooldownDetail) {
         return `${event.tradeCooldownDetail}`;
       }
+      if (reason === 'auto_cycle_cooldown' && event.tradeCooldownDetail) {
+        return `${event.tradeCooldownDetail}`;
+      }
       if (reason === 'confidence_throttle') {
         return `Risk delay active: ${remaining}s before martingale and sniper shots resume`;
       }
       if (reason === 'trade_failed') {
         return `Trade cooldown: ${remaining}s after a failed attempt`;
+      }
+      if (reason === 'auto_cycle_cooldown') {
+        return `Cycle break: ${remaining}s before the next independent cycle`;
       }
       return `Trade cooldown: ${remaining}s`;
     }
@@ -2090,6 +2107,8 @@
         color = 'var(--green)';
       } else if (stage === 'trade_failed' || stage === 'trade_cooldown') {
         color = 'var(--red)';
+      } else if (stage === 'auto_cycle_cooldown') {
+        color = 'var(--cyan)';
       } else if (stage === 'confidence_gate') {
         color = 'var(--yellow)';
       } else if (stage === 'trade_in_flight') {
@@ -2810,6 +2829,9 @@
       const autoCycleStake = Number.isFinite(Number(event.autoCycleStake))
         ? Number(event.autoCycleStake)
         : currentAutoCycleStake;
+      const autoCycleCooldownSeconds = Number.isFinite(Number(event.autoCycleCooldownSeconds))
+        ? Math.max(0, Math.floor(Number(event.autoCycleCooldownSeconds)))
+        : currentAutoCycleCooldownSeconds;
       const strategyTarget = Number.isFinite(Number(event.strategyTarget))
         ? Number(event.strategyTarget)
         : autoCycleMode
@@ -2834,6 +2856,7 @@
       currentAutoCycleMode = autoCycleMode;
       currentAutoCycleProfit = autoCycleProfit;
       currentAutoCycleStake = autoCycleStake;
+      currentAutoCycleCooldownSeconds = autoCycleCooldownSeconds;
       currentAutoRiskProfile = autoRiskProfile;
       currentSymbol = symbol;
       currentTargetSizingMode = targetSizingMode;
@@ -2843,6 +2866,7 @@
       el.autoCycleMode.checked = autoCycleMode;
       el.autoCycleProfit.value = optionalInputValue(autoCycleProfit);
       el.autoCycleStake.value = optionalInputValue(autoCycleStake);
+      el.autoCycleCooldownSeconds.value = autoCycleCooldownSeconds;
       el.autoRiskProfile.value = autoRiskProfile;
       el.symbol.value = symbol;
       el.targetSizingMode.value = targetSizingMode;
@@ -3039,6 +3063,7 @@
       currentAutoCycleMode = Boolean(el.autoCycleMode.checked);
       currentAutoCycleProfit = parseOptionalNumber(el.autoCycleProfit.value, null);
       currentAutoCycleStake = parseOptionalNumber(el.autoCycleStake.value, null);
+      currentAutoCycleCooldownSeconds = Math.max(0, Math.floor(Number(el.autoCycleCooldownSeconds.value || currentAutoCycleCooldownSeconds || 60)));
       currentProgressTarget = currentAutoModeEnabled && currentAutoCycleMode
         ? currentSeed + (currentAutoCycleProfit || Math.max(currentMinStake * 2, currentSeed * 0.1))
         : currentTarget;
@@ -3070,6 +3095,7 @@
         autoCycleMode: currentAutoCycleMode,
         autoCycleProfit: currentAutoCycleProfit,
         autoCycleStake: currentAutoCycleStake,
+        autoCycleCooldownSeconds: currentAutoCycleCooldownSeconds,
         autoRiskProfile: currentAutoRiskProfile,
         autoState: currentAutoModeEnabled ? 'scout' : 'manual',
         autoReason: currentAutoModeEnabled ? 'Auto mode starts in Scout while it gathers early run evidence.' : '',
@@ -3114,6 +3140,7 @@
         autoCycleMode: currentAutoCycleMode,
         autoCycleProfit: el.autoCycleProfit.value,
         autoCycleStake: el.autoCycleStake.value,
+        autoCycleCooldownSeconds: currentAutoCycleCooldownSeconds,
         autoRiskProfile: currentAutoRiskProfile,
         symbol: currentSymbol,
         targetSizingMode: currentTargetSizingMode,
@@ -3236,6 +3263,10 @@
       syncConfigPreviewFromControls();
     });
 
+    el.autoCycleCooldownSeconds.addEventListener('input', () => {
+      syncConfigPreviewFromControls();
+    });
+
     el.autoRiskProfile.addEventListener('change', () => {
       syncConfigPreviewFromControls();
     });
@@ -3246,6 +3277,7 @@
       currentAutoCycleMode = Boolean(config.autoCycleMode ?? currentAutoCycleMode);
       currentAutoCycleProfit = parseOptionalNumber(config.autoCycleProfit, currentAutoCycleProfit);
       currentAutoCycleStake = parseOptionalNumber(config.autoCycleStake, currentAutoCycleStake);
+      currentAutoCycleCooldownSeconds = Math.max(0, Math.floor(Number(config.autoCycleCooldownSeconds ?? currentAutoCycleCooldownSeconds ?? 60)));
       currentAutoRiskProfile = normalizeAutoRiskProfile(config.autoRiskProfile || currentAutoRiskProfile);
       currentSymbol = normalizeSymbol(config.defaultSymbol || currentSymbol);
       currentTargetSizingMode = normalizeTargetSizingMode(config.targetSizingMode || currentTargetSizingMode);
@@ -3255,6 +3287,7 @@
       el.autoCycleMode.checked = currentAutoCycleMode;
       el.autoCycleProfit.value = optionalInputValue(currentAutoCycleProfit);
       el.autoCycleStake.value = optionalInputValue(currentAutoCycleStake);
+      el.autoCycleCooldownSeconds.value = currentAutoCycleCooldownSeconds;
       el.autoRiskProfile.value = currentAutoRiskProfile;
       el.symbol.value = currentSymbol;
       el.targetSizingMode.value = currentTargetSizingMode;
