@@ -7,7 +7,7 @@ The bot has no paper-trading simulator. It connects to Deriv and can run against
 ## What It Implements
 
 - Node.js, `ws`, `express`, `socket.io`, no frontend framework, no TypeScript.
-- Dashboard inputs for a single Deriv authorization token, optional account ID, seed, target, demo/real mode, guide filters, strict bar filters, growth stairs, optional initial stake, profit aggression, and blind sniper settings.
+- Dashboard inputs for a single Deriv authorization token, optional account ID, seed, target, demo/real mode, volatility index, digit strategy mode, guide filters, strict bar filters, growth stairs, optional initial stake, profit aggression, and blind sniper settings.
 - Demo/real mode selects which account type the bot requests from Deriv. If you pin an account ID, it must match the selected mode.
 - The dashboard shows both the live Deriv account balance and the bot's session equity, so you can tell real funds from the seed-based strategy ledger.
 - The dashboard also shows live analysis status, so you can see whether the bot is warming up, waiting for a setup, or already in a trade.
@@ -23,8 +23,9 @@ The bot has no paper-trading simulator. It connects to Deriv and can run against
 - Compact-target mode is enabled automatically when the target gap is 25 percent of seed or less. It uses a target-gap-aware profit gate and a `profit_push` plan to press harder near the close instead of waiting for a seed-sized risky-jump gate.
 - Profit aggression is a 1-5 dashboard slider. Higher values start compact-target profit-push trades earlier, increase growth/profit pressure, and shorten risk cooldowns while still blocking snipes and martingale revenge during weak win-rate conditions.
 - Optional blind sniper overlay supports any number of comma-separated progress marks, including negative recovery marks. Each mark is one possible shot, with stake caps near the target so small-profit runs are not broken by a one-third-balance shot.
-- Volatility 100 Index symbol: `R_100`.
-- Contracts: `DIGITOVER` barrier `1`, and `DIGITUNDER` barrier `8`.
+- Volatility index selector supports `R_100` and `R_10`.
+- Digit strategy selector supports the base Over 1 / Under 8 loop plus high-payout experimental modes.
+- Base contracts: `DIGITOVER` barrier `1`, and `DIGITUNDER` barrier `8`.
 - Last 20 digits are tracked. The bot chooses whichever condition has hit less often recently.
 - Optional guide filters based on the attached Over-market notes:
   - Over 1 waits for current digit `1`, with digits `0` and `1` below 10 percent in the recent window.
@@ -32,6 +33,22 @@ The bot has no paper-trading simulator. It connects to Deriv and can run against
   - Stability is checked against the previous 20-digit window when enough data exists.
   - Strict bar filters are available but disabled by default because they can block too many entries.
   - Guide filters are also disabled by default so the core growth/risky/martingale loop can trade without getting stuck in setup mode.
+
+## Digit Strategy Modes
+
+These modes are selectable in the dashboard. Higher payout does not mean a positive edge by itself; it usually means a lower natural hit rate. Keep new combinations on demo until the logs prove they behave.
+
+- Base Over 1 / Under 8: original strategy. It chooses the cooler side from the recent 20-digit window, then trades `DIGITOVER 1` or `DIGITUNDER 8`.
+- High risk Over 7 / Under 2: waits around the edge digits and trades the low-hit-rate, high-payout sides. A live $1, 1-tick proposal sample on June 25, 2026 paid about +365 percent on `R_10` and +355 percent on `R_100`.
+- Digit Match Sniper: targets the coldest digit in the recent window with `DIGITMATCH`. The same sample paid about +770 percent on `R_10` and +733 percent on `R_100`, but the natural hit rate is much lower.
+
+Live proposal comparison from the same sample:
+
+- Base Over 1 / Under 8: `R_10` paid about +23 percent per stake; `R_100` paid about +22 percent.
+- Extreme Over 7 / Under 2: `R_10` paid about +365 percent; `R_100` paid about +355 percent.
+- Digit Match: `R_10` paid about +770 percent; `R_100` paid about +733 percent.
+
+That makes `R_10` the better payout selector in the current sample, but the bot still treats both as selectable because market availability, timing, and actual tick behavior matter more than a one-time quote.
 
 ## Phase Logic
 
@@ -150,6 +167,9 @@ LOSS_STAIR_WIN_RESET_COUNT=2
 LOSS_STAIR_DEBT_CAP_PERCENT=0.18
 PROFIT_GATE_PERCENT=0.08
 PROFIT_AGGRESSION=2
+DIGIT_STRATEGY_MODE=base
+MATCH_SNIPER_COOLDOWN_TRADES=3
+MATCH_SNIPER_MAX_COUNT=1
 RECOVERY_BUFFER_PERCENT=0.05
 ALL_IN_LOSS_STREAK_THRESHOLD=3
 ALL_IN_STAKE_PERCENT=0.99

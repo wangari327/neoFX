@@ -60,7 +60,7 @@
       "required": true
     },
     "SYMBOL": {
-      "description": "Trading symbol to monitor.",
+      "description": "Trading symbol to monitor. Supported dashboard values are R_10 and R_100.",
       "value": "R_100",
       "required": false
     },
@@ -132,6 +132,21 @@
     "PROFIT_AGGRESSION": {
       "description": "Dashboard default for compact-target aggression, from 1 conservative to 5 most aggressive.",
       "value": "2",
+      "required": false
+    },
+    "DIGIT_STRATEGY_MODE": {
+      "description": "Digit entry mode: base, extreme_over_under, or match_sniper.",
+      "value": "base",
+      "required": false
+    },
+    "MATCH_SNIPER_COOLDOWN_TRADES": {
+      "description": "Completed trades to wait between Digit Match Sniper attempts.",
+      "value": "3",
+      "required": false
+    },
+    "MATCH_SNIPER_MAX_COUNT": {
+      "description": "Maximum recent-window count for a digit to qualify as a match-sniper target.",
+      "value": "1",
       "required": false
     },
     "RECOVERY_BUFFER_PERCENT": {

@@ -21,6 +21,11 @@ const GROWTH_STAIR_MODES = {
   PROFIT: 'profit',
   LOSS_PRESSURE: 'loss_pressure'
 };
+const DIGIT_STRATEGY_MODES = {
+  BASE: 'base',
+  EXTREME: 'extreme_over_under',
+  MATCH_SNIPER: 'match_sniper'
+};
 
 function configuredMongoUrl() {
   return String(process.env.MONGODB_URL || process.env.MONGO_URL || '').trim();
@@ -77,6 +82,23 @@ function normalizeGrowthStairMode(value, legacyEnabled = false) {
     return GROWTH_STAIR_MODES.OFF;
   }
   return legacyEnabled ? GROWTH_STAIR_MODES.PROFIT : GROWTH_STAIR_MODES.OFF;
+}
+
+function normalizeDigitStrategyMode(value) {
+  const normalized = String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (['extreme', 'extreme_over_under', 'over_under_extreme', 'high_payout'].includes(normalized)) {
+    return DIGIT_STRATEGY_MODES.EXTREME;
+  }
+  if (['match', 'matches', 'match_sniper', 'digit_match', 'digit_match_sniper'].includes(normalized)) {
+    return DIGIT_STRATEGY_MODES.MATCH_SNIPER;
+  }
+  return DIGIT_STRATEGY_MODES.BASE;
+}
+
+function normalizeSymbol(value, fallback = 'R_100') {
+  const symbol = String(value || '').trim().toUpperCase();
+  if (['R_10', 'R_100'].includes(symbol)) return symbol;
+  return fallback;
 }
 
 function optionalNumberFrom(value, fallback = null) {
@@ -167,7 +189,10 @@ function publicConfig() {
 
   return {
     defaultMode: process.env.DEFAULT_MODE || 'demo',
-    defaultSymbol: process.env.SYMBOL || 'R_100',
+    defaultSymbol: normalizeSymbol(process.env.SYMBOL, 'R_100'),
+    digitStrategyMode: normalizeDigitStrategyMode(process.env.DIGIT_STRATEGY_MODE),
+    matchSniperCooldownTrades: numberFrom(process.env.MATCH_SNIPER_COOLDOWN_TRADES, 3),
+    matchSniperMaxCount: numberFrom(process.env.MATCH_SNIPER_MAX_COUNT, 1),
     minStake: numberFrom(process.env.MIN_STAKE, 0.35),
     windowSize: numberFrom(process.env.WINDOW_SIZE, 20),
     guideFilters: boolFrom(process.env.GUIDE_FILTERS, false),
@@ -255,7 +280,7 @@ function sanitizeStartPayload(payload = {}) {
     appId,
     seed,
     target,
-    symbol: process.env.SYMBOL || 'R_100',
+    symbol: normalizeSymbol(payload.symbol, normalizeSymbol(process.env.SYMBOL, 'R_100')),
     currency: process.env.CURRENCY || 'USD',
     minStake: numberFrom(process.env.MIN_STAKE, 0.35),
     baseStakePercent: numberFrom(process.env.BASE_STAKE_PERCENT, 0.02),
@@ -273,6 +298,9 @@ function sanitizeStartPayload(payload = {}) {
     lossStairDebtCapPercent: numberFrom(payload.lossStairDebtCapPercent, numberFrom(process.env.LOSS_STAIR_DEBT_CAP_PERCENT, 0.18)),
     profitGatePercent: numberFrom(process.env.PROFIT_GATE_PERCENT, 0.08),
     profitAggression: clamp(numberFrom(payload.profitAggression, numberFrom(process.env.PROFIT_AGGRESSION, 2)), 1, 5),
+    digitStrategyMode: normalizeDigitStrategyMode(payload.digitStrategyMode ?? process.env.DIGIT_STRATEGY_MODE),
+    matchSniperCooldownTrades: numberFrom(payload.matchSniperCooldownTrades, numberFrom(process.env.MATCH_SNIPER_COOLDOWN_TRADES, 3)),
+    matchSniperMaxCount: numberFrom(payload.matchSniperMaxCount, numberFrom(process.env.MATCH_SNIPER_MAX_COUNT, 1)),
     recoveryBufferPercent: numberFrom(process.env.RECOVERY_BUFFER_PERCENT, 0.05),
     initialStake: optionalNumberFrom(payload.initialStake, optionalNumberFrom(process.env.INITIAL_STAKE, null)),
     windowSize: numberFrom(process.env.WINDOW_SIZE, 20),
@@ -307,7 +335,11 @@ function summarizeRun(run, reason = run?.reason || 'manual') {
     mode: run.mode || run.config?.mode || 'demo',
     accountId: run.accountId || run.config?.accountId || null,
     accountKind: snapshot.accountKind || run.accountKind || null,
-    symbol: run.symbol || run.config?.symbol || 'R_100',
+    symbol: normalizeSymbol(snapshot.symbol ?? run.symbol ?? run.config?.symbol, 'R_100'),
+    digitStrategyMode: normalizeDigitStrategyMode(snapshot.digitStrategyMode ?? run.digitStrategyMode ?? run.config?.digitStrategyMode),
+    matchSniperCooldownUntilTrade: Number(snapshot.matchSniperCooldownUntilTrade ?? run.matchSniperCooldownUntilTrade ?? 0),
+    matchSniperCooldownTrades: Number(snapshot.matchSniperCooldownTrades ?? run.matchSniperCooldownTrades ?? run.config?.matchSniperCooldownTrades ?? 3),
+    matchSniperMaxCount: Number(snapshot.matchSniperMaxCount ?? run.matchSniperMaxCount ?? run.config?.matchSniperMaxCount ?? 1),
     riskFloor: Number(snapshot.riskFloor ?? run.riskFloor ?? seed),
     recoveryDebt: Number(snapshot.recoveryDebt ?? run.recoveryDebt ?? 0),
     growthTier: Number(run.growthTier ?? 0),
@@ -348,6 +380,7 @@ function summarizeRun(run, reason = run?.reason || 'manual') {
     profitPushStartRatio: Number(snapshot.profitPushStartRatio ?? run.profitPushStartRatio ?? 0),
     profitPushCapPercent: Number(snapshot.profitPushCapPercent ?? run.profitPushCapPercent ?? 0),
     estimatedWinProfitRatio: Number(snapshot.estimatedWinProfitRatio ?? run.estimatedWinProfitRatio ?? snapshot.lastWinProfitRatio ?? 0.22),
+    lastProposalProfitRatio: Number(snapshot.lastProposalProfitRatio ?? run.lastProposalProfitRatio ?? 0.22),
     tradeCooldownUntil: Number(snapshot.tradeCooldownUntil ?? run.tradeCooldownUntil ?? 0),
     tradeCooldownReason: snapshot.tradeCooldownReason ?? run.tradeCooldownReason ?? null,
     tradeCooldownDetail: snapshot.tradeCooldownDetail ?? run.tradeCooldownDetail ?? null,
@@ -394,6 +427,11 @@ function buildRunPatch(bot, runDoc, extra = {}) {
     balance: snapshot ? snapshot.balance : runDoc?.balance ?? null,
     accountBalance: snapshot ? snapshot.accountBalance : runDoc?.accountBalance ?? null,
     accountKind: snapshot ? snapshot.accountKind : runDoc?.accountKind ?? null,
+    symbol: normalizeSymbol(snapshot?.symbol ?? runDoc?.symbol ?? runDoc?.config?.symbol, 'R_100'),
+    digitStrategyMode: normalizeDigitStrategyMode(snapshot?.digitStrategyMode ?? runDoc?.digitStrategyMode ?? runDoc?.config?.digitStrategyMode),
+    matchSniperCooldownUntilTrade: Number(snapshot?.matchSniperCooldownUntilTrade ?? runDoc?.matchSniperCooldownUntilTrade ?? 0),
+    matchSniperCooldownTrades: Number(snapshot?.matchSniperCooldownTrades ?? runDoc?.matchSniperCooldownTrades ?? runDoc?.config?.matchSniperCooldownTrades ?? 3),
+    matchSniperMaxCount: Number(snapshot?.matchSniperMaxCount ?? runDoc?.matchSniperMaxCount ?? runDoc?.config?.matchSniperMaxCount ?? 1),
     phase: snapshot ? snapshot.phase : runDoc?.phase ?? null,
     riskFloor: snapshot ? snapshot.riskFloor : runDoc?.riskFloor ?? null,
     recoveryDebt: snapshot ? snapshot.recoveryDebt : runDoc?.recoveryDebt ?? null,
@@ -428,6 +466,7 @@ function buildRunPatch(bot, runDoc, extra = {}) {
     profitPushStartRatio: Number(snapshot?.profitPushStartRatio ?? runDoc?.profitPushStartRatio ?? 0),
     profitPushCapPercent: Number(snapshot?.profitPushCapPercent ?? runDoc?.profitPushCapPercent ?? 0),
     estimatedWinProfitRatio: Number(snapshot?.estimatedWinProfitRatio ?? runDoc?.estimatedWinProfitRatio ?? snapshot?.lastWinProfitRatio ?? 0.22),
+    lastProposalProfitRatio: Number(snapshot?.lastProposalProfitRatio ?? runDoc?.lastProposalProfitRatio ?? 0.22),
     tradeCooldownUntil: snapshot?.tradeCooldownUntil ?? runDoc?.tradeCooldownUntil ?? 0,
     tradeCooldownReason: snapshot?.tradeCooldownReason ?? runDoc?.tradeCooldownReason ?? null,
     tradeCooldownDetail: snapshot?.tradeCooldownDetail ?? runDoc?.tradeCooldownDetail ?? null,
@@ -538,6 +577,11 @@ function runBalanceState(run) {
     balance,
     accountBalance: snapshot.accountBalance ?? run.accountBalance ?? null,
     phase,
+    symbol: normalizeSymbol(snapshot.symbol ?? run.symbol ?? run.config?.symbol, 'R_100'),
+    digitStrategyMode: normalizeDigitStrategyMode(snapshot.digitStrategyMode ?? run.digitStrategyMode ?? run.config?.digitStrategyMode),
+    matchSniperCooldownUntilTrade: Number(snapshot.matchSniperCooldownUntilTrade ?? run.matchSniperCooldownUntilTrade ?? 0),
+    matchSniperCooldownTrades: Number(snapshot.matchSniperCooldownTrades ?? run.matchSniperCooldownTrades ?? run.config?.matchSniperCooldownTrades ?? 3),
+    matchSniperMaxCount: Number(snapshot.matchSniperMaxCount ?? run.matchSniperMaxCount ?? run.config?.matchSniperMaxCount ?? 1),
     seed,
     target,
     profitLoss: roundMoney(balance - seed),
@@ -585,6 +629,7 @@ function runBalanceState(run) {
     profitPushStartRatio: Number(snapshot.profitPushStartRatio ?? run.profitPushStartRatio ?? 0),
     profitPushCapPercent: Number(snapshot.profitPushCapPercent ?? run.profitPushCapPercent ?? 0),
     estimatedWinProfitRatio: Number(snapshot.estimatedWinProfitRatio ?? run.estimatedWinProfitRatio ?? snapshot.lastWinProfitRatio ?? 0.22),
+    lastProposalProfitRatio: Number(snapshot.lastProposalProfitRatio ?? run.lastProposalProfitRatio ?? 0.22),
     tradeCooldownUntil: Number(snapshot.tradeCooldownUntil ?? run.tradeCooldownUntil ?? 0),
     tradeCooldownReason: snapshot.tradeCooldownReason ?? run.tradeCooldownReason ?? null,
     tradeCooldownDetail: snapshot.tradeCooldownDetail ?? run.tradeCooldownDetail ?? null,
@@ -757,6 +802,11 @@ function bindBot(bot) {
         balance: event.balance,
         accountBalance: event.accountBalance ?? null,
         phase: event.phase,
+        symbol: event.symbol,
+        digitStrategyMode: event.digitStrategyMode,
+        matchSniperCooldownUntilTrade: event.matchSniperCooldownUntilTrade,
+        matchSniperCooldownTrades: event.matchSniperCooldownTrades,
+        matchSniperMaxCount: event.matchSniperMaxCount,
         totalTrades: event.totalTrades,
         wins: event.wins,
         losses: event.losses,
@@ -780,7 +830,8 @@ function bindBot(bot) {
         profitPushStake: event.profitPushStake,
         profitPushStartRatio: event.profitPushStartRatio,
         profitPushCapPercent: event.profitPushCapPercent,
-        estimatedWinProfitRatio: event.estimatedWinProfitRatio
+        estimatedWinProfitRatio: event.estimatedWinProfitRatio,
+        lastProposalProfitRatio: event.lastProposalProfitRatio
       }
     }).catch((error) => {
       console.error('Failed to persist balance update:', error);
@@ -868,6 +919,10 @@ async function startFreshRun(payload = {}) {
     reason: 'manual',
     mode: config.mode,
     symbol: config.symbol,
+    digitStrategyMode: config.digitStrategyMode,
+    matchSniperCooldownUntilTrade: initialSnapshot.matchSniperCooldownUntilTrade,
+    matchSniperCooldownTrades: initialSnapshot.matchSniperCooldownTrades,
+    matchSniperMaxCount: initialSnapshot.matchSniperMaxCount,
     currency: config.currency,
     accountId: config.accountId || null,
     accountKind: null,
@@ -905,6 +960,7 @@ async function startFreshRun(payload = {}) {
     profitPushStartRatio: initialSnapshot.profitPushStartRatio,
     profitPushCapPercent: initialSnapshot.profitPushCapPercent,
     estimatedWinProfitRatio: initialSnapshot.estimatedWinProfitRatio,
+    lastProposalProfitRatio: initialSnapshot.lastProposalProfitRatio,
     tradeCooldownUntil: initialSnapshot.tradeCooldownUntil,
     tradeCooldownReason: initialSnapshot.tradeCooldownReason,
     tradeCooldownDetail: initialSnapshot.tradeCooldownDetail,

@@ -22,6 +22,12 @@ const CONDITIONS = {
   }
 };
 
+const DIGIT_STRATEGY_MODES = {
+  BASE: 'base',
+  EXTREME: 'extreme_over_under',
+  MATCH_SNIPER: 'match_sniper'
+};
+
 const PHASES = {
   GROWTH: 'growth',
   RISKY: 'risky_jump',
@@ -78,6 +84,65 @@ function normalizeGrowthStairMode(value, legacyEnabled = false) {
     return GROWTH_STAIR_MODES.OFF;
   }
   return legacyEnabled ? GROWTH_STAIR_MODES.PROFIT : GROWTH_STAIR_MODES.OFF;
+}
+
+function normalizeDigitStrategyMode(value) {
+  const normalized = String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (['extreme', 'extreme_over_under', 'over_under_extreme', 'high_payout'].includes(normalized)) {
+    return DIGIT_STRATEGY_MODES.EXTREME;
+  }
+  if (['match', 'matches', 'match_sniper', 'digit_match', 'digit_match_sniper'].includes(normalized)) {
+    return DIGIT_STRATEGY_MODES.MATCH_SNIPER;
+  }
+  return DIGIT_STRATEGY_MODES.BASE;
+}
+
+function normalizeSymbol(value, fallback = 'R_100') {
+  const symbol = String(value || '').trim().toUpperCase();
+  if (['R_10', 'R_100'].includes(symbol)) return symbol;
+  return fallback;
+}
+
+function digitOverCondition(barrier, label = `Over ${barrier}`) {
+  const resolvedBarrier = Number(barrier);
+  return {
+    id: `over_${resolvedBarrier}`,
+    label,
+    contractType: 'DIGITOVER',
+    barrier: String(resolvedBarrier),
+    entryDigit: resolvedBarrier,
+    losingDigits: Array.from({ length: resolvedBarrier + 1 }, (_, digit) => digit),
+    strategyMode: DIGIT_STRATEGY_MODES.EXTREME,
+    wins: (digit) => digit > resolvedBarrier
+  };
+}
+
+function digitUnderCondition(barrier, label = `Under ${barrier}`) {
+  const resolvedBarrier = Number(barrier);
+  return {
+    id: `under_${resolvedBarrier}`,
+    label,
+    contractType: 'DIGITUNDER',
+    barrier: String(resolvedBarrier),
+    entryDigit: resolvedBarrier,
+    losingDigits: Array.from({ length: 10 - resolvedBarrier }, (_, index) => resolvedBarrier + index),
+    strategyMode: DIGIT_STRATEGY_MODES.EXTREME,
+    wins: (digit) => digit < resolvedBarrier
+  };
+}
+
+function digitMatchCondition(digit) {
+  const resolvedDigit = Number(digit);
+  return {
+    id: `match_${resolvedDigit}`,
+    label: `Match ${resolvedDigit}`,
+    contractType: 'DIGITMATCH',
+    barrier: String(resolvedDigit),
+    entryDigit: resolvedDigit,
+    losingDigits: Array.from({ length: 10 }, (_, value) => value).filter((value) => value !== resolvedDigit),
+    strategyMode: DIGIT_STRATEGY_MODES.MATCH_SNIPER,
+    wins: (exitDigit) => exitDigit === resolvedDigit
+  };
 }
 
 function normalizeMilestoneList(value, fallback = [0.25, 0.5, 0.75]) {
@@ -196,7 +261,7 @@ class DerivDigitBot extends EventEmitter {
       apiBaseUrl: options.apiBaseUrl || DEFAULT_API_BASE_URL,
       accountId: options.accountId || '',
       appId: options.appId || '1089',
-      symbol: options.symbol || 'R_100',
+      symbol: normalizeSymbol(options.symbol, 'R_100'),
       currency: options.currency || 'USD',
       seed: roundMoney(toNumber(options.seed, 10)),
       target: roundMoney(toNumber(options.target, 50)),
@@ -220,6 +285,9 @@ class DerivDigitBot extends EventEmitter {
       lossStairDebtCapPercent: clamp(toNumber(options.lossStairDebtCapPercent, 0.18), 0.02, 1),
       profitGatePercent: toNumber(options.profitGatePercent, 0.08),
       profitAggression: clamp(toNumber(options.profitAggression, PROFIT_AGGRESSION_DEFAULT), 1, 5),
+      digitStrategyMode: normalizeDigitStrategyMode(options.digitStrategyMode ?? options.highRiskDigitMode),
+      matchSniperCooldownTrades: Math.max(1, Math.floor(toNumber(options.matchSniperCooldownTrades, 3))),
+      matchSniperMaxCount: Math.max(0, Math.floor(toNumber(options.matchSniperMaxCount, 1))),
       recoveryBufferPercent: toNumber(options.recoveryBufferPercent, 0.05),
       initialStake: toOptionalNumber(options.initialStake, null),
       blindSniperEnabled: options.blindSniperEnabled === true,
@@ -249,6 +317,7 @@ class DerivDigitBot extends EventEmitter {
     this.riskFloor = this.options.seed;
     this.recoveryDebt = 0;
     this.lastWinProfitRatio = DEFAULT_DIGIT_WIN_PROFIT_RATIO;
+    this.lastProposalProfitRatio = this.strategyFallbackProfitRatio();
     this.lastPipSize = 2;
     this.growthAnchorBalance = this.options.seed;
     this.growthLossStairTier = 0;
@@ -266,6 +335,7 @@ class DerivDigitBot extends EventEmitter {
     this.tradesSinceBlindSniper = 0;
     this.sniperOverlayNet = 0;
     this.emergencyAllInUsed = false;
+    this.matchSniperCooldownUntilTrade = 0;
 
     this.totalTrades = 0;
     this.wins = 0;
@@ -573,6 +643,8 @@ class DerivDigitBot extends EventEmitter {
       stage,
       detail,
       phase: this.phase,
+      symbol: this.options.symbol,
+      digitStrategyMode: this.options.digitStrategyMode,
       tradeInFlight: this.tradeInFlight,
       digitsSeen: this.digits.length,
       windowSize: this.options.windowSize,
@@ -597,6 +669,11 @@ class DerivDigitBot extends EventEmitter {
       profitAggression: this.options.profitAggression,
       profitPushStartRatio: calibration.profitPushStartRatio,
       profitPushCapPercent: calibration.profitPushCapPercent,
+      estimatedWinProfitRatio: calibration.estimatedWinProfitRatio,
+      lastProposalProfitRatio: this.lastProposalProfitRatio,
+      matchSniperCooldownUntilTrade: this.matchSniperCooldownUntilTrade,
+      matchSniperCooldownTrades: this.options.matchSniperCooldownTrades,
+      matchSniperMaxCount: this.options.matchSniperMaxCount,
       martingaleLossStreak: this.martingaleLossStreak,
       splitRecoveryArmed: this.splitRecoveryArmed,
       splitRecoveryReadyAtTrade: this.splitRecoveryReadyAtTrade,
@@ -684,11 +761,18 @@ class DerivDigitBot extends EventEmitter {
     return clamp((toNumber(this.options.profitAggression, PROFIT_AGGRESSION_DEFAULT) - 1) / 4, 0, 1);
   }
 
+  strategyFallbackProfitRatio() {
+    const mode = normalizeDigitStrategyMode(this.options.digitStrategyMode);
+    if (mode === DIGIT_STRATEGY_MODES.MATCH_SNIPER) return this.options.symbol === 'R_10' ? 7.7 : 7.33;
+    if (mode === DIGIT_STRATEGY_MODES.EXTREME) return this.options.symbol === 'R_10' ? 3.65 : 3.55;
+    return DEFAULT_DIGIT_WIN_PROFIT_RATIO;
+  }
+
   estimatedWinProfitRatio() {
     return clamp(
-      toNumber(this.lastWinProfitRatio, DEFAULT_DIGIT_WIN_PROFIT_RATIO),
+      toNumber(this.lastProposalProfitRatio, toNumber(this.lastWinProfitRatio, this.strategyFallbackProfitRatio())),
       0.12,
-      1
+      10
     );
   }
 
@@ -1380,6 +1464,17 @@ class DerivDigitBot extends EventEmitter {
   }
 
   selectCondition(currentDigit, { ignoreGuideFilters = false } = {}) {
+    const mode = normalizeDigitStrategyMode(this.options.digitStrategyMode);
+    if (mode === DIGIT_STRATEGY_MODES.EXTREME) {
+      return this.selectExtremeCondition(currentDigit, { ignoreGuideFilters });
+    }
+    if (mode === DIGIT_STRATEGY_MODES.MATCH_SNIPER) {
+      return this.selectMatchSniperCondition(currentDigit, { ignoreGuideFilters });
+    }
+    return this.selectBaseCondition(currentDigit, { ignoreGuideFilters });
+  }
+
+  selectBaseCondition(currentDigit, { ignoreGuideFilters = false } = {}) {
     const stats = this.stats();
     const overHits = stats.window.filter(CONDITIONS.OVER_1.wins).length;
     const underHits = stats.window.filter(CONDITIONS.UNDER_8.wins).length;
@@ -1397,6 +1492,64 @@ class DerivDigitBot extends EventEmitter {
     if (ignoreGuideFilters) return condition;
     if (!this.options.guideFilters) return condition;
     return this.guideAllows(condition, currentDigit, stats) ? condition : null;
+  }
+
+  selectExtremeCondition(currentDigit, { ignoreGuideFilters = false } = {}) {
+    const stats = this.stats();
+    const over = digitOverCondition(7, 'Over 7');
+    const under = digitUnderCondition(2, 'Under 2');
+
+    if (ignoreGuideFilters) {
+      const overHits = stats.window.filter(over.wins).length;
+      const underHits = stats.window.filter(under.wins).length;
+      if (overHits < underHits) return over;
+      if (underHits < overHits) return under;
+      return stats.counts[8] + stats.counts[9] <= stats.counts[0] + stats.counts[1] ? over : under;
+    }
+
+    let condition = null;
+    if (currentDigit === over.entryDigit) condition = over;
+    if (currentDigit === under.entryDigit) condition = under;
+    if (!condition) return null;
+    if (!this.options.guideFilters) return condition;
+    return this.extremeGuideAllows(condition, currentDigit, stats) ? condition : null;
+  }
+
+  selectMatchSniperCondition(currentDigit, { ignoreGuideFilters = false } = {}) {
+    const stats = this.stats();
+    if (!ignoreGuideFilters && this.totalTrades < this.matchSniperCooldownUntilTrade) return null;
+
+    const minCount = Math.min(...stats.counts);
+    if (!ignoreGuideFilters && minCount > this.options.matchSniperMaxCount) return null;
+
+    const coldDigits = stats.counts
+      .map((count, digit) => ({ count, digit }))
+      .filter((item) => item.count === minCount)
+      .sort((a, b) => {
+        if (a.digit === currentDigit) return 1;
+        if (b.digit === currentDigit) return -1;
+        return a.digit - b.digit;
+      });
+
+    const target = coldDigits[0] ? coldDigits[0].digit : currentDigit;
+    if (!Number.isInteger(target)) return null;
+    return digitMatchCondition(target);
+  }
+
+  extremeGuideAllows(condition, currentDigit, stats) {
+    if (currentDigit !== condition.entryDigit) return false;
+
+    const winningHits = stats.window.filter(condition.wins).length;
+    const expectedHits = this.options.windowSize * 0.2;
+    if (winningHits > expectedHits + 1) return false;
+
+    if (this.options.strictBarFilters) {
+      const winningDigits = condition.contractType === 'DIGITOVER' ? [8, 9] : [0, 1];
+      const winningSideHot = winningDigits.some((digit) => stats.hotDigits.includes(digit));
+      if (winningSideHot) return false;
+    }
+
+    return true;
   }
 
   guideAllows(condition, currentDigit, stats) {
@@ -1645,10 +1798,14 @@ class DerivDigitBot extends EventEmitter {
     if (!proposalId) throw new Error('Deriv did not return a proposal id.');
 
     const proposalAskPrice = roundMoney(toNumber(proposal.proposal && proposal.proposal.ask_price, stake));
+    const proposalPayout = roundMoney(toNumber(proposal.proposal && proposal.proposal.payout, proposalAskPrice));
+    if (proposalAskPrice > 0 && proposalPayout > proposalAskPrice) {
+      this.lastProposalProfitRatio = (proposalPayout - proposalAskPrice) / proposalAskPrice;
+    }
     const buyPrice = roundMoney(Math.max(stake, proposalAskPrice + 0.01));
     this.emitAnalysis(
       'proposal_ready',
-      `Proposal ready for ${condition.label}. Ask price ${proposalAskPrice.toFixed(2)}. Buying at ${buyPrice.toFixed(2)}.`,
+      `Proposal ready for ${condition.label}. Ask price ${proposalAskPrice.toFixed(2)}, payout ${proposalPayout.toFixed(2)}. Buying at ${buyPrice.toFixed(2)}.`,
       { condition, plan }
     );
     const buy = await this.send({ buy: proposalId, price: buyPrice });
@@ -1709,6 +1866,10 @@ class DerivDigitBot extends EventEmitter {
       this.initialStakeUsed = true;
     }
 
+    if (result.condition && result.condition.strategyMode === DIGIT_STRATEGY_MODES.MATCH_SNIPER) {
+      this.matchSniperCooldownUntilTrade = this.totalTrades + this.options.matchSniperCooldownTrades;
+    }
+
     if (result.won && result.stake > 0 && Number.isFinite(result.profit) && result.profit > 0) {
       this.lastWinProfitRatio = result.profit / result.stake;
     }
@@ -1734,6 +1895,8 @@ class DerivDigitBot extends EventEmitter {
       accountBalance: this.accountBalance,
       phase: this.phase,
       plan: plan.kind,
+      symbol: this.options.symbol,
+      digitStrategyMode: this.options.digitStrategyMode,
       contractId: result.contractId,
       growthTier: this.growthTier(),
       growthStep: this.growthMilestoneStep(),
@@ -1752,6 +1915,10 @@ class DerivDigitBot extends EventEmitter {
       profitPushStartRatio: profitPushState.startRatio,
       profitPushCapPercent: profitPushState.capPercent,
       estimatedWinProfitRatio: calibration.estimatedWinProfitRatio,
+      lastProposalProfitRatio: this.lastProposalProfitRatio,
+      matchSniperCooldownUntilTrade: this.matchSniperCooldownUntilTrade,
+      matchSniperCooldownTrades: this.options.matchSniperCooldownTrades,
+      matchSniperMaxCount: this.options.matchSniperMaxCount,
       growthStairMode: this.growthStairMode(),
       growthStairsEnabled: this.growthStairsEnabled(),
       growthLossStairTier: this.growthLossStairTier,
@@ -1804,7 +1971,8 @@ class DerivDigitBot extends EventEmitter {
       `phase=${tradeEvent.phase} plan=${tradeEvent.plan} tier=${tradeEvent.growthTier} ` +
       `session_balance=${tradeEvent.effectiveGrowthBalance.toFixed(2)} overlay=${tradeEvent.sniperOverlayNet.toFixed(2)} ` +
       `growth_floor=${tradeEvent.growthFloor.toFixed(2)} floor=${this.riskFloor.toFixed(2)} debt=${this.currentRecoveryDebt().toFixed(2)} ` +
-      `goal_mode=${tradeEvent.goalMode} ` +
+      `symbol=${tradeEvent.symbol} digit_strategy=${tradeEvent.digitStrategyMode} goal_mode=${tradeEvent.goalMode} ` +
+      `payout_ratio=${tradeEvent.estimatedWinProfitRatio.toFixed(2)} ` +
       `stair_mode=${tradeEvent.growthStairMode} loss_tier=${tradeEvent.growthLossStairTier}/${tradeEvent.lossStairMaxTier} ` +
       `aggression=${tradeEvent.profitAggression}/5 ` +
       `confidence_gate=${tradeEvent.confidenceGateLocked ? 'on' : 'off'} ` +
@@ -2056,6 +2224,8 @@ class DerivDigitBot extends EventEmitter {
       to: nextPhase,
       reason,
       balance: this.balance,
+      symbol: this.options.symbol,
+      digitStrategyMode: this.options.digitStrategyMode,
       riskFloor: this.riskFloor,
       recoveryDebt: this.currentRecoveryDebt(),
       effectiveGrowthBalance: this.effectiveGrowthBalance(),
@@ -2113,6 +2283,10 @@ class DerivDigitBot extends EventEmitter {
       profitPushStartRatio: profitPushState.startRatio,
       profitPushCapPercent: profitPushState.capPercent,
       estimatedWinProfitRatio: calibration.estimatedWinProfitRatio,
+      lastProposalProfitRatio: this.lastProposalProfitRatio,
+      matchSniperCooldownUntilTrade: this.matchSniperCooldownUntilTrade,
+      matchSniperCooldownTrades: this.options.matchSniperCooldownTrades,
+      matchSniperMaxCount: this.options.matchSniperMaxCount,
       seed: this.options.seed,
       target: this.options.target
     };
@@ -2126,6 +2300,8 @@ class DerivDigitBot extends EventEmitter {
       balance: this.balance,
       accountBalance: this.accountBalance,
       phase: this.phase,
+      symbol: this.options.symbol,
+      digitStrategyMode: this.options.digitStrategyMode,
       seed: this.options.seed,
       target: this.options.target,
       profitLoss: roundMoney(this.balance - this.options.seed),
@@ -2190,6 +2366,10 @@ class DerivDigitBot extends EventEmitter {
       profitPushStartRatio: profitPushState.startRatio,
       profitPushCapPercent: profitPushState.capPercent,
       estimatedWinProfitRatio: calibration.estimatedWinProfitRatio,
+      lastProposalProfitRatio: this.lastProposalProfitRatio,
+      matchSniperCooldownUntilTrade: this.matchSniperCooldownUntilTrade,
+      matchSniperCooldownTrades: this.options.matchSniperCooldownTrades,
+      matchSniperMaxCount: this.options.matchSniperMaxCount,
       tradeCooldownUntil: this.tradeCooldownUntil,
       tradeCooldownReason: this.tradeCooldownReason,
       tradeCooldownDetail: this.tradeCooldownDetail
@@ -2209,6 +2389,7 @@ class DerivDigitBot extends EventEmitter {
       accountId: this.options.accountId || null,
       accountKind: this.accountKind,
       symbol: this.options.symbol,
+      digitStrategyMode: this.options.digitStrategyMode,
       phase: this.phase,
       seed: this.options.seed,
       target: this.options.target,
@@ -2277,11 +2458,14 @@ class DerivDigitBot extends EventEmitter {
       accountBalance: this.accountBalance,
       accountKind: this.accountKind,
       phase: this.phase,
+      symbol: this.options.symbol,
+      digitStrategyMode: this.options.digitStrategyMode,
       riskFloor: this.riskFloor,
       recoveryDebt: this.currentRecoveryDebt(),
       effectiveGrowthBalance: this.effectiveGrowthBalance(),
       sniperOverlayNet: this.sniperOverlayNet,
       lastWinProfitRatio: this.lastWinProfitRatio,
+      lastProposalProfitRatio: this.lastProposalProfitRatio,
       lastPipSize: this.lastPipSize,
       growthAnchorBalance: this.growthAnchorBalance,
       growthStairMode: this.growthStairMode(),
@@ -2328,6 +2512,10 @@ class DerivDigitBot extends EventEmitter {
       profitPushStartRatio: profitPushState.startRatio,
       profitPushCapPercent: profitPushState.capPercent,
       estimatedWinProfitRatio: calibration.estimatedWinProfitRatio,
+      lastProposalProfitRatio: this.lastProposalProfitRatio,
+      matchSniperCooldownUntilTrade: this.matchSniperCooldownUntilTrade,
+      matchSniperCooldownTrades: this.options.matchSniperCooldownTrades,
+      matchSniperMaxCount: this.options.matchSniperMaxCount,
       tradeCooldownUntil: this.tradeCooldownUntil,
       tradeCooldownReason: this.tradeCooldownReason,
       tradeCooldownDetail: this.tradeCooldownDetail,
@@ -2362,10 +2550,13 @@ class DerivDigitBot extends EventEmitter {
       : roundMoney(toNumber(snapshot.accountBalance, this.accountBalance ?? this.balance));
     this.accountKind = snapshot.accountKind || this.accountKind;
     this.phase = snapshot.phase || this.phase;
+    this.options.symbol = normalizeSymbol(snapshot.symbol, this.options.symbol);
+    this.options.digitStrategyMode = normalizeDigitStrategyMode(snapshot.digitStrategyMode ?? this.options.digitStrategyMode);
     this.riskFloor = roundMoney(toNumber(snapshot.riskFloor, this.riskFloor));
     this.recoveryDebt = roundMoney(toNumber(snapshot.recoveryDebt, this.recoveryDebt));
     this.sniperOverlayNet = roundMoney(toNumber(snapshot.sniperOverlayNet, this.sniperOverlayNet));
     this.lastWinProfitRatio = toNumber(snapshot.lastWinProfitRatio, this.lastWinProfitRatio);
+    this.lastProposalProfitRatio = toNumber(snapshot.lastProposalProfitRatio, this.lastProposalProfitRatio);
     this.lastPipSize = toNumber(snapshot.lastPipSize, this.lastPipSize);
     this.growthAnchorBalance = roundMoney(toNumber(snapshot.growthAnchorBalance, this.growthAnchorBalance));
     this.options.profitAggression = clamp(toNumber(snapshot.profitAggression, this.options.profitAggression), 1, 5);
@@ -2382,6 +2573,9 @@ class DerivDigitBot extends EventEmitter {
     this.options.initialStake = toOptionalNumber(snapshot.initialStake, this.options.initialStake);
     this.initialStakeUsed = Boolean(snapshot.initialStakeUsed ?? this.initialStakeUsed);
     this.martingaleLossStreak = Math.max(0, Math.floor(toNumber(snapshot.martingaleLossStreak, this.martingaleLossStreak)));
+    this.matchSniperCooldownUntilTrade = Math.max(0, Math.floor(toNumber(snapshot.matchSniperCooldownUntilTrade, this.matchSniperCooldownUntilTrade)));
+    this.options.matchSniperCooldownTrades = Math.max(1, Math.floor(toNumber(snapshot.matchSniperCooldownTrades, this.options.matchSniperCooldownTrades)));
+    this.options.matchSniperMaxCount = Math.max(0, Math.floor(toNumber(snapshot.matchSniperMaxCount, this.options.matchSniperMaxCount)));
     this.emergencyAllInUsed = Boolean(snapshot.emergencyAllInUsed ?? this.emergencyAllInUsed);
     this.splitRecoveryArmed = Boolean(snapshot.splitRecoveryArmed ?? this.splitRecoveryArmed);
     this.splitRecoveryReadyAtTrade = Math.max(0, Math.floor(toNumber(snapshot.splitRecoveryReadyAtTrade, this.splitRecoveryReadyAtTrade)));
@@ -2455,6 +2649,7 @@ class DerivDigitBot extends EventEmitter {
       accountId: this.options.accountId || null,
       accountKind: this.accountKind,
       symbol: this.options.symbol,
+      digitStrategyMode: this.options.digitStrategyMode,
       riskFloor: this.riskFloor,
       recoveryDebt: this.currentRecoveryDebt(),
       effectiveGrowthBalance: this.effectiveGrowthBalance(),
@@ -2490,6 +2685,10 @@ class DerivDigitBot extends EventEmitter {
       profitPushStartRatio: profitPushState.startRatio,
       profitPushCapPercent: profitPushState.capPercent,
       estimatedWinProfitRatio: calibration.estimatedWinProfitRatio,
+      lastProposalProfitRatio: this.lastProposalProfitRatio,
+      matchSniperCooldownUntilTrade: this.matchSniperCooldownUntilTrade,
+      matchSniperCooldownTrades: this.options.matchSniperCooldownTrades,
+      matchSniperMaxCount: this.options.matchSniperMaxCount,
       tradeCooldownUntil: this.tradeCooldownUntil,
       tradeCooldownReason: this.tradeCooldownReason,
       tradeCooldownDetail: this.tradeCooldownDetail,
