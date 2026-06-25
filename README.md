@@ -23,6 +23,7 @@ The bot has no paper-trading simulator. It connects to Deriv and can run against
 - Compact-target mode is enabled automatically when the target gap is 25 percent of seed or less. It uses a target-gap-aware profit gate and a `profit_push` plan to press harder near the close instead of waiting for a seed-sized risky-jump gate.
 - Profit aggression is a 1-5 dashboard slider. Higher values start compact-target profit-push trades earlier, increase growth/profit pressure, and shorten risk cooldowns while still blocking snipes and martingale revenge during weak win-rate conditions.
 - Auto mode can dynamically tune the approved weapons after launch. It starts in Scout/Grind, builds profit fuel, then unlocks Pressure or Blast only when recovery debt is clear, win rate is acceptable, and enough profit sits above the protected floor.
+- The dashboard includes an Auto decision ticker and a compact Auto log so you can see why Auto changed symbol, strategy, sniper, stairs, or aggression.
 - Optional blind sniper overlay supports any number of comma-separated progress marks, including negative recovery marks. Each mark is one possible shot, with stake caps near the target so small-profit runs are not broken by a one-third-balance shot.
 - Volatility index selector supports `R_100` and `R_10`.
 - Digit strategy selector supports the base Over 1 / Under 8 loop plus high-payout experimental modes.
@@ -66,6 +67,8 @@ Auto can switch:
 - Blind sniper availability.
 - Guide/strict filters.
 - Match-sniper cooldown and cold-count tolerance.
+
+When Auto changes volatility symbol, the bot resubscribes the live tick stream and rebuilds the digit window before allowing the next trade. This prevents the bot from analyzing one volatility index while buying contracts on another.
 
 Auto states:
 

@@ -396,6 +396,9 @@ class DerivDigitBot extends EventEmitter {
     this.ws = null;
     this.pending = new Map();
     this.contractWatchers = new Map();
+    this.tickSubscriptionId = null;
+    this.tickSymbol = this.options.symbol;
+    this.symbolSwitchInFlight = null;
     this.reqId = 1;
     this.pingTimer = null;
     this.analysisState = {
@@ -536,7 +539,11 @@ class DerivDigitBot extends EventEmitter {
     });
 
     await this.send({ balance: 1, subscribe: 1 });
-    await this.send({ ticks: this.options.symbol, subscribe: 1 });
+    const tickSubscription = await this.send({ ticks: this.options.symbol, subscribe: 1 });
+    this.tickSubscriptionId = tickSubscription.subscription && tickSubscription.subscription.id
+      ? tickSubscription.subscription.id
+      : null;
+    this.tickSymbol = this.options.symbol;
     void this.seedHistoricalDigits();
     this.emitAnalysis('listening', 'Live ticks are flowing. Building the digit window now.');
 
@@ -661,14 +668,69 @@ class DerivDigitBot extends EventEmitter {
     }
   }
 
+  requestSymbolSwitch(nextSymbol, reason = 'auto_symbol_switch') {
+    const symbol = normalizeSymbol(nextSymbol, this.options.symbol);
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      this.tickSymbol = symbol;
+      return;
+    }
+    if (this.tickSymbol === symbol || this.symbolSwitchInFlight === symbol) return;
+
+    const previousSymbol = this.tickSymbol;
+    this.symbolSwitchInFlight = symbol;
+    this.emitAnalysis(
+      'symbol_switch',
+      `Switching live tick stream ${previousSymbol} -> ${symbol}. Rebuilding the digit window before the next trade.`,
+      { auto: this.autoLastDecision, plan: { kind: 'symbol_switch' } }
+    );
+
+    (async () => {
+      if (this.tickSubscriptionId) {
+        await this.send({ forget: this.tickSubscriptionId }, 5000).catch(() => {});
+      }
+
+      this.digits = [];
+      this.tickSubscriptionId = null;
+      const tickSubscription = await this.send({ ticks: symbol, subscribe: 1 });
+      this.tickSubscriptionId = tickSubscription.subscription && tickSubscription.subscription.id
+        ? tickSubscription.subscription.id
+        : null;
+      this.tickSymbol = symbol;
+      this.symbolSwitchInFlight = null;
+      await this.seedHistoricalDigits();
+      this.emitAnalysis(
+        'symbol_switch',
+        `Live tick stream is now ${symbol}. The bot will trade after the window is ready.`,
+        { auto: this.autoLastDecision, plan: { kind: 'symbol_switch' } }
+      );
+    })().catch(async (error) => {
+      this.options.symbol = previousSymbol;
+      this.lastProposalProfitRatio = this.strategyFallbackProfitRatio();
+      try {
+        const fallbackSubscription = await this.send({ ticks: previousSymbol, subscribe: 1 }, 5000);
+        this.tickSubscriptionId = fallbackSubscription.subscription && fallbackSubscription.subscription.id
+          ? fallbackSubscription.subscription.id
+          : null;
+        this.tickSymbol = previousSymbol;
+        void this.seedHistoricalDigits();
+      } catch {
+        this.tickSubscriptionId = null;
+      }
+      this.symbolSwitchInFlight = null;
+      this.emit('error_event', { message: `Symbol switch failed: ${error.message}` });
+    });
+  }
+
   emitAnalysis(stage, detail, extras = {}) {
-    const immediate = new Set(['connecting', 'listening', 'ready', 'signal_ready', 'placing_trade']);
+    const immediate = new Set(['connecting', 'listening', 'ready', 'signal_ready', 'placing_trade', 'auto_commander', 'symbol_switch']);
     const now = Date.now();
     const key = [
       stage,
       extras.currentDigit ?? '',
       extras.condition ? extras.condition.id : '',
       extras.plan ? extras.plan.kind : '',
+      extras.auto ? extras.auto.state : '',
+      extras.auto ? extras.auto.reason : '',
       extras.tradeInFlight ? '1' : '0'
     ].join('|');
 
@@ -1091,6 +1153,9 @@ class DerivDigitBot extends EventEmitter {
       if (strategyChanged) {
         this.lastProposalProfitRatio = this.strategyFallbackProfitRatio();
       }
+      if (before.symbol !== next.symbol) {
+        this.requestSymbolSwitch(next.symbol, nextState);
+      }
     }
 
     this.autoState = nextState;
@@ -1112,7 +1177,7 @@ class DerivDigitBot extends EventEmitter {
       settings: next
     };
 
-    if ((changed || stateChanged || reviewDue) && reviewDue) {
+    if (changed || stateChanged || reviewDue) {
       this.autoLastReviewTrade = this.totalTrades;
       this.emitAnalysis(
         'auto_commander',
@@ -1771,6 +1836,15 @@ class DerivDigitBot extends EventEmitter {
       return;
     }
 
+    if (plan.waitOnly) {
+      this.emitAnalysis(
+        'symbol_switch',
+        `Auto is switching to ${this.symbolSwitchInFlight || this.options.symbol}. Waiting for the new digit window before trading.`,
+        { currentDigit: tick.digit, plan, auto: this.autoLastDecision }
+      );
+      return;
+    }
+
     if (Date.now() < this.tradeCooldownUntil && this.planShouldWaitForThrottle(plan)) {
       const remainingMs = Math.max(0, this.tradeCooldownUntil - Date.now());
       const remainingSeconds = Math.max(1, Math.ceil(remainingMs / 1000));
@@ -1999,6 +2073,13 @@ class DerivDigitBot extends EventEmitter {
     }
 
     this.applyAutoCommander();
+    if (this.symbolSwitchInFlight) {
+      return {
+        kind: 'symbol_switch_wait',
+        stake: 0,
+        waitOnly: true
+      };
+    }
 
     const calibration = this.goalCalibration();
     const confidenceGate = this.confidenceGateState();

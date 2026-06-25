@@ -560,6 +560,94 @@
       background: #101313;
     }
 
+    .auto-feed {
+      margin-top: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: linear-gradient(180deg, #151818, #101212);
+      overflow: hidden;
+    }
+
+    .auto-ticker {
+      height: 30px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 10px;
+      border-bottom: 1px solid var(--line);
+      overflow: hidden;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .auto-ticker strong {
+      flex: 0 0 auto;
+      color: var(--cyan);
+      font-size: 11px;
+      text-transform: uppercase;
+    }
+
+    .auto-ticker-text {
+      display: inline-block;
+      min-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .auto-ticker.flash .auto-ticker-text {
+      color: var(--text);
+      animation: auto-slide 7s linear 1;
+    }
+
+    @keyframes auto-slide {
+      0% {
+        transform: translateX(100%);
+      }
+      12%,
+      82% {
+        transform: translateX(0);
+      }
+      100% {
+        transform: translateX(-12%);
+      }
+    }
+
+    .auto-log {
+      max-height: 96px;
+      overflow: auto;
+      padding: 6px 8px;
+      display: grid;
+      gap: 5px;
+      scrollbar-gutter: stable;
+    }
+
+    .auto-log-row {
+      display: grid;
+      grid-template-columns: 58px minmax(72px, 0.25fr) minmax(0, 1fr);
+      gap: 8px;
+      align-items: start;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.3;
+    }
+
+    .auto-log-row strong {
+      color: var(--yellow);
+      font-weight: 800;
+      text-transform: capitalize;
+    }
+
+    .auto-log-row span:first-child {
+      color: var(--cyan);
+    }
+
+    .auto-log-empty {
+      color: var(--muted);
+      font-size: 11px;
+      padding: 2px 0;
+    }
+
     .sparkline-wrap {
       margin-top: 12px;
       padding: 8px 10px 10px;
@@ -822,6 +910,11 @@
         border-right: 0;
       }
 
+      .auto-log-row {
+        grid-template-columns: 52px minmax(58px, 0.35fr) minmax(0, 1fr);
+        gap: 6px;
+      }
+
       .equity-head {
         align-items: flex-start;
         flex-direction: column;
@@ -1073,6 +1166,16 @@
             <span id="paceText">Trade pace normal</span>
           </div>
 
+          <div class="auto-feed" aria-live="polite">
+            <div id="autoTicker" class="auto-ticker">
+              <strong>Auto</strong>
+              <span id="autoTickerText" class="auto-ticker-text">Auto decisions will appear here when Auto mode is enabled.</span>
+            </div>
+            <div id="autoLog" class="auto-log">
+              <div class="auto-log-empty">No Auto decisions yet.</div>
+            </div>
+          </div>
+
           <div class="sparkline-wrap">
             <div class="sparkline-head">
               <span>Balance Trail</span>
@@ -1219,6 +1322,9 @@
       progressMarker: document.getElementById('progressMarker'),
       equityValue: document.getElementById('equityValue'),
       equityDelta: document.getElementById('equityDelta'),
+      autoTicker: document.getElementById('autoTicker'),
+      autoTickerText: document.getElementById('autoTickerText'),
+      autoLog: document.getElementById('autoLog'),
       equityChart: document.getElementById('equityChart'),
       lastTradeText: document.getElementById('lastTradeText'),
       tokenHelp: document.getElementById('tokenHelp'),
@@ -1231,6 +1337,8 @@
 
     let liveRows = [];
     let viewRows = [];
+    let autoRows = [];
+    let lastAutoLogKey = '';
     let currentView = 'live';
     let currentSeed = Number(el.seed.value);
     let currentTarget = Number(el.target.value);
@@ -1348,6 +1456,86 @@
       const state = String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
       if (!state || state === 'manual') return 'manual';
       return state.replace(/_/g, ' ');
+    }
+
+    function autoDecisionFromEvent(event = {}) {
+      const decision = event.autoDecision && typeof event.autoDecision === 'object'
+        ? event.autoDecision
+        : {};
+      const settings = decision.settings && typeof decision.settings === 'object'
+        ? decision.settings
+        : {};
+      const state = String(decision.state || event.autoState || (event.autoModeEnabled ? 'scout' : 'manual'));
+      const profile = normalizeAutoRiskProfile(decision.profile || event.autoRiskProfile || currentAutoRiskProfile);
+      const symbol = normalizeSymbol(settings.symbol || event.symbol || currentSymbol);
+      const strategy = normalizeDigitStrategyMode(settings.digitStrategyMode || event.digitStrategyMode || currentDigitStrategyMode);
+      const aggression = clampNumber(settings.profitAggression ?? event.profitAggression ?? currentProfitAggression, 1, 5);
+      const fuel = Number.isFinite(Number(decision.profitFuel)) ? Number(decision.profitFuel) : null;
+      const needed = Number.isFinite(Number(decision.fuelNeeded)) ? Number(decision.fuelNeeded) : null;
+      const reason = String(
+        event.stage === 'symbol_switch'
+          ? event.detail || decision.reason || event.autoReason || 'Auto symbol switch.'
+          : decision.reason || event.autoReason || event.detail || 'Auto state updated.'
+      );
+      const meta = [
+        symbol,
+        digitStrategyLabel(strategy),
+        `aggression ${aggression}/5`,
+        fuel !== null && needed !== null ? `fuel ${money(fuel)}/${money(needed)}` : ''
+      ].filter(Boolean).join(' - ');
+
+      return {
+        time: event.time || new Date().toISOString(),
+        state,
+        profile,
+        symbol,
+        strategy,
+        aggression,
+        reason,
+        meta
+      };
+    }
+
+    function renderAutoLog() {
+      if (!autoRows.length) {
+        el.autoLog.innerHTML = '<div class="auto-log-empty">No Auto decisions yet.</div>';
+        return;
+      }
+
+      el.autoLog.innerHTML = autoRows.map((row) => [
+        '<div class="auto-log-row">',
+        `<span>${escapeHtml(formatTime(row.time))}</span>`,
+        `<strong>${escapeHtml(autoStateLabel(row.state))}</strong>`,
+        `<span title="${escapeHtml(row.reason)}">${escapeHtml(row.reason)}<br>${escapeHtml(row.meta)}</span>`,
+        '</div>'
+      ].join('')).join('');
+    }
+
+    function flashAutoTicker(text) {
+      el.autoTickerText.textContent = text;
+      el.autoTicker.classList.remove('flash');
+      void el.autoTicker.offsetWidth;
+      el.autoTicker.classList.add('flash');
+    }
+
+    function pushAutoDecision(event = {}, source = 'event') {
+      if (!event.autoModeEnabled && !event.autoDecision && !event.autoReason) return;
+      const row = autoDecisionFromEvent(event);
+      const key = [
+        row.state,
+        row.profile,
+        row.symbol,
+        row.strategy,
+        row.aggression,
+        row.reason
+      ].join('|');
+      if (key === lastAutoLogKey && source !== 'manual') return;
+
+      lastAutoLogKey = key;
+      autoRows.unshift(row);
+      autoRows = autoRows.slice(0, 10);
+      renderAutoLog();
+      flashAutoTicker(`${autoStateLabel(row.state)} - ${row.reason}`);
     }
 
     function previewGateStep(seed, target, aggression = currentProfitAggression) {
@@ -1768,6 +1956,9 @@
           ? `Auto ${autoStateLabel(event.autoState)} · ${autoRiskLabel(currentAutoRiskProfile)}`
           : 'Auto off';
         el.autoText.title = String(event.autoReason || '');
+        if (event.stage === 'auto_commander' || event.autoDecision || event.autoReason) {
+          pushAutoDecision(event, 'analysis');
+        }
       }
 
       let text = event && event.detail ? event.detail : 'Analyzing live ticks...';
@@ -2558,6 +2749,15 @@
         ? `Auto ${autoStateLabel(autoState)} · ${autoRiskLabel(autoRiskProfile)}`
         : 'Auto off';
       el.autoText.title = autoReason;
+      if (autoModeEnabled && (event.autoDecision || autoReason)) {
+        pushAutoDecision({
+          ...event,
+          autoModeEnabled,
+          autoRiskProfile,
+          autoState,
+          autoReason
+        }, source || 'balance');
+      }
       el.strategyText.textContent = estimatedWinProfitRatio > 0
         ? `${symbol} · ${digitStrategyLabel(digitStrategyMode)} · payout +${(estimatedWinProfitRatio * 100).toFixed(0)}%`
         : `${symbol} · ${digitStrategyLabel(digitStrategyMode)}`;
@@ -2691,6 +2891,9 @@
       const startBlindSniperMilestones = normalizeMilestoneList(el.blindSniperMarks.value || currentBlindSniperMilestones, currentBlindSniperMilestones);
       currentBlindSniperMilestones = startBlindSniperMilestones;
       currentBlindSniperStartRatio = startBlindSniperMilestones[startBlindSniperMilestones.length - 1] ?? currentBlindSniperStartRatio;
+      autoRows = [];
+      lastAutoLogKey = '';
+      renderAutoLog();
       resetEquityTrail();
       updateStats({
         balance: currentSeed,
