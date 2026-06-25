@@ -17,7 +17,9 @@ The bot has no paper-trading simulator. It connects to Deriv and can run against
 - Session balance starts at the seed you enter. The bot uses contract profit/loss to update that session balance.
 - The bot preloads recent tick history on start so it can evaluate the 20-digit window immediately instead of waiting for a fresh warmup.
 - If a trade attempt fails, the bot now pauses briefly and keeps analyzing instead of stopping outright on the first error.
-- Optional growth stairs raise the growth stake floor after mini profit milestones, so long win streaks stop feeling flat.
+- Growth stairs are selectable: off, profit stairs, or loss-pressure stairs.
+- Profit stairs raise the growth stake floor after mini profit milestones.
+- Loss-pressure stairs do the reverse: ordinary growth/profit-push losses raise a capped temporary tier, then ordinary wins cool it down or reset it before full martingale recovery takes over.
 - Compact-target mode is enabled automatically when the target gap is 25 percent of seed or less. It uses a target-gap-aware profit gate and a `profit_push` plan to press harder near the close instead of waiting for a seed-sized risky-jump gate.
 - Profit aggression is a 1-5 dashboard slider. Higher values start compact-target profit-push trades earlier, increase growth/profit pressure, and shorten risk cooldowns while still blocking snipes and martingale revenge during weak win-rate conditions.
 - Optional blind sniper overlay supports any number of comma-separated progress marks, including negative recovery marks. Each mark is one possible shot, with stake caps near the target so small-profit runs are not broken by a one-third-balance shot.
@@ -38,8 +40,10 @@ Growth mode:
 - Base stake is 2 percent of session balance.
 - Minimum stake is `$0.35`.
 - The bot tracks a protected realized-profit floor.
-- The growth stake floor rises in small steps as the session gains profit.
-- Each mini milestone is based on a small profit chunk above the seed, and each step bumps the growth floor by a fixed percentage of the minimum stake.
+- Growth stairs are optional and can run in either profit mode or loss-pressure mode.
+- Profit stairs: each mini milestone above the current growth anchor bumps the growth floor by a fixed percentage of the minimum stake.
+- Loss-pressure stairs: ordinary growth/profit-push losses increase a capped temporary tier, while ordinary wins lower the tier and reset it after the configured win count.
+- Loss-pressure stairs can carry only small recovery debt. If the debt exceeds the configured cap or the tier limit is reached, normal martingale/split recovery takes over.
 - When session balance reaches the protected floor plus the profit gate step, the bot enters Risky Jump.
 - On standard goals, the gate step defaults to 8 percent of the seed, or at least two minimum stakes, whichever is higher.
 - On compact goals, the gate step is capped from the actual seed-to-target gap, so a `$100 -> $105` run no longer waits for an `$8` profit wave before using stronger closeout logic.
@@ -99,6 +103,10 @@ Growth staircase defaults:
 - `GROWTH_MILESTONE_PERCENT=0.025`
 - `GROWTH_STAKE_BUMP_PERCENT=0.15`
 - `GROWTH_STAKE_CAP_PERCENT=0.12`
+- `GROWTH_STAIR_MODE=off`
+- `LOSS_STAIR_MAX_TIER=3`
+- `LOSS_STAIR_WIN_RESET_COUNT=2`
+- `LOSS_STAIR_DEBT_CAP_PERCENT=0.18`
 
 ## Local Setup
 
@@ -136,6 +144,10 @@ MARTINGALE_CAP_PERCENT=0.40
 GROWTH_MILESTONE_PERCENT=0.025
 GROWTH_STAKE_BUMP_PERCENT=0.15
 GROWTH_STAKE_CAP_PERCENT=0.12
+GROWTH_STAIR_MODE=off
+LOSS_STAIR_MAX_TIER=3
+LOSS_STAIR_WIN_RESET_COUNT=2
+LOSS_STAIR_DEBT_CAP_PERCENT=0.18
 PROFIT_GATE_PERCENT=0.08
 PROFIT_AGGRESSION=2
 RECOVERY_BUFFER_PERCENT=0.05

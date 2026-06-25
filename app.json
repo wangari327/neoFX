@@ -104,6 +104,26 @@
       "value": "0.12",
       "required": false
     },
+    "GROWTH_STAIR_MODE": {
+      "description": "Growth stair behavior: off, profit, or loss_pressure.",
+      "value": "off",
+      "required": false
+    },
+    "LOSS_STAIR_MAX_TIER": {
+      "description": "Maximum loss-pressure growth stair tier before full recovery takes over.",
+      "value": "3",
+      "required": false
+    },
+    "LOSS_STAIR_WIN_RESET_COUNT": {
+      "description": "Consecutive ordinary wins needed to reset loss-pressure stairs.",
+      "value": "2",
+      "required": false
+    },
+    "LOSS_STAIR_DEBT_CAP_PERCENT": {
+      "description": "Maximum recovery debt, as a fraction of session balance, that loss-pressure stairs may carry before martingale takes over.",
+      "value": "0.18",
+      "required": false
+    },
     "PROFIT_GATE_PERCENT": {
       "description": "Profit increment needed before the bot attempts a higher-risk cycle.",
       "value": "0.08",

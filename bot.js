@@ -41,6 +41,11 @@ const BLIND_SNIPER_PROFIT_CAP_FRACTION = 0.25;
 const BLIND_SNIPER_PROGRESS_TAPER_FLOOR = 0.2;
 const DEFAULT_DIGIT_WIN_PROFIT_RATIO = 0.22;
 const PROFIT_AGGRESSION_DEFAULT = 2;
+const GROWTH_STAIR_MODES = {
+  OFF: 'off',
+  PROFIT: 'profit',
+  LOSS_PRESSURE: 'loss_pressure'
+};
 
 function toNumber(value, fallback) {
   const number = Number(value);
@@ -59,6 +64,20 @@ function roundMoney(value) {
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
+}
+
+function normalizeGrowthStairMode(value, legacyEnabled = false) {
+  const normalized = String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (['loss', 'loss_pressure', 'loss_stairs', 'reverse', 'reverse_stairs'].includes(normalized)) {
+    return GROWTH_STAIR_MODES.LOSS_PRESSURE;
+  }
+  if (['profit', 'profit_stairs', 'growth', 'on', 'true', '1'].includes(normalized)) {
+    return GROWTH_STAIR_MODES.PROFIT;
+  }
+  if (['off', 'none', 'false', '0'].includes(normalized)) {
+    return GROWTH_STAIR_MODES.OFF;
+  }
+  return legacyEnabled ? GROWTH_STAIR_MODES.PROFIT : GROWTH_STAIR_MODES.OFF;
 }
 
 function normalizeMilestoneList(value, fallback = [0.25, 0.5, 0.75]) {
@@ -166,6 +185,11 @@ class DerivDigitBot extends EventEmitter {
   constructor(options = {}) {
     super();
 
+    const growthStairMode = normalizeGrowthStairMode(
+      options.growthStairMode ?? options.growthStairsMode,
+      options.growthStairsEnabled === true
+    );
+
     this.options = {
       mode: options.mode || 'demo',
       token: options.token || '',
@@ -189,10 +213,14 @@ class DerivDigitBot extends EventEmitter {
       growthMilestonePercent: toNumber(options.growthMilestonePercent, 0.025),
       growthStakeBumpPercent: toNumber(options.growthStakeBumpPercent, 0.15),
       growthStakeCapPercent: toNumber(options.growthStakeCapPercent, 0.12),
+      growthStairMode,
+      growthStairsEnabled: growthStairMode !== GROWTH_STAIR_MODES.OFF,
+      lossStairMaxTier: Math.max(1, Math.floor(toNumber(options.lossStairMaxTier, 3))),
+      lossStairWinResetCount: Math.max(1, Math.floor(toNumber(options.lossStairWinResetCount, 2))),
+      lossStairDebtCapPercent: clamp(toNumber(options.lossStairDebtCapPercent, 0.18), 0.02, 1),
       profitGatePercent: toNumber(options.profitGatePercent, 0.08),
       profitAggression: clamp(toNumber(options.profitAggression, PROFIT_AGGRESSION_DEFAULT), 1, 5),
       recoveryBufferPercent: toNumber(options.recoveryBufferPercent, 0.05),
-      growthStairsEnabled: options.growthStairsEnabled === true,
       initialStake: toOptionalNumber(options.initialStake, null),
       blindSniperEnabled: options.blindSniperEnabled === true,
       blindSniperCadenceTrades: Math.max(1, Math.floor(toNumber(options.blindSniperCadenceTrades, 3))),
@@ -223,6 +251,8 @@ class DerivDigitBot extends EventEmitter {
     this.lastWinProfitRatio = DEFAULT_DIGIT_WIN_PROFIT_RATIO;
     this.lastPipSize = 2;
     this.growthAnchorBalance = this.options.seed;
+    this.growthLossStairTier = 0;
+    this.growthLossWinStreak = 0;
     this.martingaleLossStreak = 0;
     this.splitRecoveryArmed = false;
     this.splitRecoveryReadyAtTrade = 0;
@@ -559,6 +589,11 @@ class DerivDigitBot extends EventEmitter {
       blindSniperTradesUntilShot: Math.max(0, calibration.sniperCadenceTrades - this.tradesSinceBlindSniper),
       blindSniperProgress: this.sessionProgressRatio(),
       blindSniperArmed: this.blindSniperState().armed,
+      growthStairMode: this.growthStairMode(),
+      growthStairsEnabled: this.growthStairsEnabled(),
+      growthLossStairTier: this.growthLossStairTier,
+      growthLossWinStreak: this.growthLossWinStreak,
+      lossStairMaxTier: this.options.lossStairMaxTier,
       profitAggression: this.options.profitAggression,
       profitPushStartRatio: calibration.profitPushStartRatio,
       profitPushCapPercent: calibration.profitPushCapPercent,
@@ -580,8 +615,28 @@ class DerivDigitBot extends EventEmitter {
     ));
   }
 
+  growthStairMode() {
+    return normalizeGrowthStairMode(this.options.growthStairMode, this.options.growthStairsEnabled);
+  }
+
+  growthStairsEnabled() {
+    return this.growthStairMode() !== GROWTH_STAIR_MODES.OFF;
+  }
+
+  lossPressureStairsEnabled() {
+    return this.growthStairMode() === GROWTH_STAIR_MODES.LOSS_PRESSURE;
+  }
+
+  profitStairsEnabled() {
+    return this.growthStairMode() === GROWTH_STAIR_MODES.PROFIT;
+  }
+
   growthTier() {
-    if (!this.options.growthStairsEnabled) return 0;
+    if (!this.growthStairsEnabled()) return 0;
+    if (this.lossPressureStairsEnabled()) {
+      return Math.max(0, Math.floor(toNumber(this.growthLossStairTier, 0)));
+    }
+
     const step = this.growthMilestoneStep();
     if (step <= 0) return 0;
     const anchor = Number.isFinite(this.growthAnchorBalance) ? this.growthAnchorBalance : this.options.seed;
@@ -595,7 +650,7 @@ class DerivDigitBot extends EventEmitter {
       : this.options.minStake;
     const floors = [baseFloor];
 
-    if (this.options.growthStairsEnabled) {
+    if (this.growthStairsEnabled()) {
       const tier = confidenceGate.locked ? 0 : this.growthTier();
       floors.push(roundMoney(baseFloor * (1 + tier * this.options.growthStakeBumpPercent)));
     }
@@ -737,6 +792,63 @@ class DerivDigitBot extends EventEmitter {
     };
   }
 
+  isLossPressurePlan(plan) {
+    return [PHASES.GROWTH, 'profit_push', 'initial_stake'].includes(plan && plan.kind);
+  }
+
+  resetGrowthLossStairs() {
+    this.growthLossStairTier = 0;
+    this.growthLossWinStreak = 0;
+  }
+
+  updateLossPressureStairs(plan, result) {
+    if (!this.lossPressureStairsEnabled() || !this.isLossPressurePlan(plan)) return;
+
+    if (result.won) {
+      this.growthLossWinStreak += 1;
+      if (this.currentRecoveryDebt() <= 0 || this.growthLossWinStreak >= this.options.lossStairWinResetCount) {
+        this.resetGrowthLossStairs();
+      } else {
+        this.growthLossStairTier = Math.max(1, this.growthLossStairTier - 1);
+      }
+      return;
+    }
+
+    this.growthLossWinStreak = 0;
+    this.growthLossStairTier = Math.min(
+      this.options.lossStairMaxTier,
+      Math.max(0, this.growthLossStairTier) + 1
+    );
+  }
+
+  lossPressureState(plan = null) {
+    const enabled = this.lossPressureStairsEnabled();
+    const debt = this.currentRecoveryDebt();
+    const debtCap = Math.max(this.options.minStake, this.balance * this.options.lossStairDebtCapPercent);
+    const tier = Math.max(0, Math.floor(toNumber(this.growthLossStairTier, 0)));
+    const canAbsorb =
+      enabled &&
+      this.isLossPressurePlan(plan) &&
+      !this.splitRecoveryArmed &&
+      tier > 0 &&
+      tier < this.options.lossStairMaxTier &&
+      debt > 0 &&
+      debt <= debtCap;
+
+    return {
+      enabled,
+      canAbsorb,
+      tier,
+      maxTier: this.options.lossStairMaxTier,
+      winStreak: this.growthLossWinStreak,
+      winResetCount: this.options.lossStairWinResetCount,
+      debt,
+      debtCap: roundMoney(debtCap),
+      debtCapPercent: this.options.lossStairDebtCapPercent,
+      mode: this.growthStairMode()
+    };
+  }
+
   sessionProgressRatio() {
     const span = Math.max(0.01, this.options.target - this.options.seed);
     return clamp((this.effectiveGrowthBalance() - this.options.seed) / span, -1, 1);
@@ -857,7 +969,12 @@ class DerivDigitBot extends EventEmitter {
     const cadenceTrades = calibration.sniperCadenceTrades;
     const tradesUntilShot = Math.max(0, cadenceTrades - this.tradesSinceBlindSniper);
     const confidenceBlocked = Boolean(confidenceGate.locked && confidenceGate.progress > 0);
-    const phaseReady = ![PHASES.MARTINGALE, PHASES.REBUILD, PHASES.STOPPED].includes(this.phase) && !this.splitRecoveryArmed && !confidenceBlocked;
+    const recoveryDebtOpen = this.currentRecoveryDebt() > 0;
+    const phaseReady =
+      ![PHASES.MARTINGALE, PHASES.REBUILD, PHASES.STOPPED].includes(this.phase) &&
+      !this.splitRecoveryArmed &&
+      !recoveryDebtOpen &&
+      !confidenceBlocked;
     const nextMilestone = milestoneIndex < milestones.length ? milestones[milestoneIndex] : null;
     const armed =
       enabled &&
@@ -875,7 +992,7 @@ class DerivDigitBot extends EventEmitter {
     } else if (!phaseReady) {
       reason = confidenceBlocked
         ? 'confidence_blocked'
-        : this.splitRecoveryArmed
+        : this.splitRecoveryArmed || recoveryDebtOpen
           ? 'recovery_blocked'
           : 'phase_blocked';
     } else if (nextMilestone !== null && progress < nextMilestone) {
@@ -913,6 +1030,7 @@ class DerivDigitBot extends EventEmitter {
       startRatio: this.options.blindSniperStartRatio,
       stakeFraction: this.options.blindSniperStakeFraction,
       confidenceGateLocked: confidenceBlocked,
+      recoveryDebtOpen,
       confidenceGateWinRate: confidenceGate.winRate,
       confidenceGateTriggerWinRate: confidenceGate.triggerWinRate,
       confidenceGateReleaseWinRate: confidenceGate.releaseWinRate
@@ -1037,6 +1155,7 @@ class DerivDigitBot extends EventEmitter {
   }
 
   armSplitRecovery(reason = 'martingale_retry_limit_reached') {
+    this.resetGrowthLossStairs();
     this.splitRecoveryArmed = true;
     this.splitRecoveryPiecesRemaining = this.options.splitRecoveryPieces;
     this.splitRecoveryReadyAtTrade = this.totalTrades + this.options.splitRecoveryCooldownTrades;
@@ -1045,6 +1164,7 @@ class DerivDigitBot extends EventEmitter {
   }
 
   clearSplitRecovery(reason = 'split_recovery_cleared') {
+    this.resetGrowthLossStairs();
     this.splitRecoveryArmed = false;
     this.splitRecoveryPiecesRemaining = 0;
     this.splitRecoveryReadyAtTrade = 0;
@@ -1389,6 +1509,20 @@ class DerivDigitBot extends EventEmitter {
       );
     }
 
+    const lossPressure = this.lossPressureState({ kind: PHASES.GROWTH });
+    if (lossPressure.canAbsorb) {
+      this.emitAnalysis(
+        'loss_pressure_stairs',
+        `Loss-pressure stairs are carrying ${lossPressure.debt.toFixed(2)} recovery debt with growth tier ${lossPressure.tier}/${lossPressure.maxTier}. Full martingale waits unless the cap is exceeded.`,
+        { plan: { kind: PHASES.GROWTH }, lossPressure }
+      );
+      return {
+        kind: PHASES.GROWTH,
+        stake: this.growthStake(),
+        lossPressure
+      };
+    }
+
     if (
       profitPush.reason === 'progress_wait' &&
       calibration.compact &&
@@ -1580,6 +1714,7 @@ class DerivDigitBot extends EventEmitter {
     }
 
     this.balance = roundMoney(this.balance + result.profit);
+    this.updateLossPressureStairs(plan, result);
     const confidenceGate = this.confidenceGateState();
     const sniperState = this.blindSniperState(confidenceGate);
     const profitPushState = this.profitPushState(confidenceGate);
@@ -1617,7 +1752,13 @@ class DerivDigitBot extends EventEmitter {
       profitPushStartRatio: profitPushState.startRatio,
       profitPushCapPercent: profitPushState.capPercent,
       estimatedWinProfitRatio: calibration.estimatedWinProfitRatio,
-      growthStairsEnabled: this.options.growthStairsEnabled,
+      growthStairMode: this.growthStairMode(),
+      growthStairsEnabled: this.growthStairsEnabled(),
+      growthLossStairTier: this.growthLossStairTier,
+      growthLossWinStreak: this.growthLossWinStreak,
+      lossStairMaxTier: this.options.lossStairMaxTier,
+      lossStairWinResetCount: this.options.lossStairWinResetCount,
+      lossStairDebtCapPercent: this.options.lossStairDebtCapPercent,
       initialStake: this.options.initialStake,
       initialStakeUsed: this.initialStakeUsed,
       blindSniperUses: this.blindSniperUses,
@@ -1664,6 +1805,7 @@ class DerivDigitBot extends EventEmitter {
       `session_balance=${tradeEvent.effectiveGrowthBalance.toFixed(2)} overlay=${tradeEvent.sniperOverlayNet.toFixed(2)} ` +
       `growth_floor=${tradeEvent.growthFloor.toFixed(2)} floor=${this.riskFloor.toFixed(2)} debt=${this.currentRecoveryDebt().toFixed(2)} ` +
       `goal_mode=${tradeEvent.goalMode} ` +
+      `stair_mode=${tradeEvent.growthStairMode} loss_tier=${tradeEvent.growthLossStairTier}/${tradeEvent.lossStairMaxTier} ` +
       `aggression=${tradeEvent.profitAggression}/5 ` +
       `confidence_gate=${tradeEvent.confidenceGateLocked ? 'on' : 'off'} ` +
       `profit_push=${tradeEvent.profitPushArmed ? 'armed' : tradeEvent.profitPushReason} ` +
@@ -1714,11 +1856,30 @@ class DerivDigitBot extends EventEmitter {
       this.martingaleLossStreak = 0;
       this.emergencyAllInUsed = false;
       const remainingDebt = this.currentRecoveryDebt();
+
+      if (this.lossPressureStairsEnabled() && this.isLossPressurePlan(plan)) {
+        if (remainingDebt <= 0) {
+          this.resetGrowthLossStairs();
+        } else {
+          const lossPressure = this.lossPressureState(plan);
+          this.emitAnalysis(
+            'loss_pressure_stairs',
+            `Loss-pressure stairs won but $${remainingDebt.toFixed(2)} recovery debt remains. The bot keeps the rally small at tier ${lossPressure.tier}/${lossPressure.maxTier}.`,
+            { plan, condition: result.condition, lossPressure }
+          );
+          if (this.phase !== PHASES.GROWTH) {
+            this.changePhase(PHASES.GROWTH, 'loss_pressure_recovery_continues');
+          }
+          return;
+        }
+      }
+
       if (plan.kind === PHASES.RISKY) {
         if (remainingDebt <= 0) {
           const lockedFloor = this.lockedProfitFloor();
           this.riskFloor = lockedFloor;
           this.growthAnchorBalance = lockedFloor;
+          this.resetGrowthLossStairs();
           this.clearSplitRecovery(null);
           this.changePhase(PHASES.GROWTH, 'risky_jump_won_floor_locked');
         } else {
@@ -1739,6 +1900,7 @@ class DerivDigitBot extends EventEmitter {
           const lockedFloor = this.lockedProfitFloor();
           this.riskFloor = lockedFloor;
           this.growthAnchorBalance = lockedFloor;
+          this.resetGrowthLossStairs();
           this.clearSplitRecovery(null);
           this.changePhase(
             PHASES.GROWTH,
@@ -1766,6 +1928,7 @@ class DerivDigitBot extends EventEmitter {
           const lockedFloor = this.lockedProfitFloor();
           this.riskFloor = lockedFloor;
           this.growthAnchorBalance = lockedFloor;
+          this.resetGrowthLossStairs();
           this.clearSplitRecovery(null);
           this.changePhase(PHASES.GROWTH, 'all_in_recovered_to_growth');
           return;
@@ -1798,6 +1961,17 @@ class DerivDigitBot extends EventEmitter {
 
     if (this.balance < this.options.seed * 0.5) {
       this.stop('stop_loss');
+      return;
+    }
+
+    const lossPressure = this.lossPressureState(plan);
+    if (lossPressure.canAbsorb) {
+      this.emitAnalysis(
+        'loss_pressure_stairs',
+        `Loss-pressure stairs absorbed a growth loss. Tier ${lossPressure.tier}/${lossPressure.maxTier}; recovery debt ${lossPressure.debt.toFixed(2)} stays under the ${lossPressure.debtCap.toFixed(2)} small-rally cap.`,
+        { plan, condition: result.condition, lossPressure }
+      );
+      this.changePhase(PHASES.GROWTH, 'loss_pressure_stair_climbed');
       return;
     }
 
@@ -1850,8 +2024,10 @@ class DerivDigitBot extends EventEmitter {
     }
 
     if (this.balance >= this.options.minStake) {
+      if (this.lossPressureStairsEnabled()) this.resetGrowthLossStairs();
       this.changePhase(PHASES.MARTINGALE, 'loss_triggered_realized_profit_recovery');
     } else {
+      if (this.lossPressureStairsEnabled()) this.resetGrowthLossStairs();
       this.changePhase(PHASES.REBUILD, 'loss_triggered_rebuild');
     }
   }
@@ -1888,7 +2064,13 @@ class DerivDigitBot extends EventEmitter {
       growthStep: this.growthMilestoneStep(),
       growthFloor: this.growthStakeFloor(),
       gateStep: this.profitGateStep(),
-      growthStairsEnabled: this.options.growthStairsEnabled,
+      growthStairMode: this.growthStairMode(),
+      growthStairsEnabled: this.growthStairsEnabled(),
+      growthLossStairTier: this.growthLossStairTier,
+      growthLossWinStreak: this.growthLossWinStreak,
+      lossStairMaxTier: this.options.lossStairMaxTier,
+      lossStairWinResetCount: this.options.lossStairWinResetCount,
+      lossStairDebtCapPercent: this.options.lossStairDebtCapPercent,
       initialStake: this.options.initialStake,
       initialStakeUsed: this.initialStakeUsed,
       blindSniperEnabled: this.options.blindSniperEnabled,
@@ -1959,7 +2141,13 @@ class DerivDigitBot extends EventEmitter {
       growthStep: this.growthMilestoneStep(),
       growthFloor: this.growthStakeFloor(),
       gateStep: this.profitGateStep(),
-      growthStairsEnabled: this.options.growthStairsEnabled,
+      growthStairMode: this.growthStairMode(),
+      growthStairsEnabled: this.growthStairsEnabled(),
+      growthLossStairTier: this.growthLossStairTier,
+      growthLossWinStreak: this.growthLossWinStreak,
+      lossStairMaxTier: this.options.lossStairMaxTier,
+      lossStairWinResetCount: this.options.lossStairWinResetCount,
+      lossStairDebtCapPercent: this.options.lossStairDebtCapPercent,
       initialStake: this.options.initialStake,
       initialStakeUsed: this.initialStakeUsed,
       blindSniperEnabled: this.options.blindSniperEnabled,
@@ -2032,7 +2220,13 @@ class DerivDigitBot extends EventEmitter {
       growthStep: this.growthMilestoneStep(),
       growthFloor: this.growthStakeFloor(),
       balance: this.balance,
-      growthStairsEnabled: this.options.growthStairsEnabled,
+      growthStairMode: this.growthStairMode(),
+      growthStairsEnabled: this.growthStairsEnabled(),
+      growthLossStairTier: this.growthLossStairTier,
+      growthLossWinStreak: this.growthLossWinStreak,
+      lossStairMaxTier: this.options.lossStairMaxTier,
+      lossStairWinResetCount: this.options.lossStairWinResetCount,
+      lossStairDebtCapPercent: this.options.lossStairDebtCapPercent,
       initialStake: this.options.initialStake,
       initialStakeUsed: this.initialStakeUsed,
       blindSniperEnabled: this.options.blindSniperEnabled,
@@ -2090,7 +2284,13 @@ class DerivDigitBot extends EventEmitter {
       lastWinProfitRatio: this.lastWinProfitRatio,
       lastPipSize: this.lastPipSize,
       growthAnchorBalance: this.growthAnchorBalance,
-      growthStairsEnabled: this.options.growthStairsEnabled,
+      growthStairMode: this.growthStairMode(),
+      growthStairsEnabled: this.growthStairsEnabled(),
+      growthLossStairTier: this.growthLossStairTier,
+      growthLossWinStreak: this.growthLossWinStreak,
+      lossStairMaxTier: this.options.lossStairMaxTier,
+      lossStairWinResetCount: this.options.lossStairWinResetCount,
+      lossStairDebtCapPercent: this.options.lossStairDebtCapPercent,
       initialStake: this.options.initialStake,
       initialStakeUsed: this.initialStakeUsed,
       martingaleLossStreak: this.martingaleLossStreak,
@@ -2169,7 +2369,16 @@ class DerivDigitBot extends EventEmitter {
     this.lastPipSize = toNumber(snapshot.lastPipSize, this.lastPipSize);
     this.growthAnchorBalance = roundMoney(toNumber(snapshot.growthAnchorBalance, this.growthAnchorBalance));
     this.options.profitAggression = clamp(toNumber(snapshot.profitAggression, this.options.profitAggression), 1, 5);
-    this.options.growthStairsEnabled = Boolean(snapshot.growthStairsEnabled ?? this.options.growthStairsEnabled);
+    this.options.growthStairMode = normalizeGrowthStairMode(
+      snapshot.growthStairMode,
+      Boolean(snapshot.growthStairsEnabled ?? this.options.growthStairsEnabled)
+    );
+    this.options.growthStairsEnabled = this.growthStairsEnabled();
+    this.growthLossStairTier = Math.max(0, Math.floor(toNumber(snapshot.growthLossStairTier, this.growthLossStairTier)));
+    this.growthLossWinStreak = Math.max(0, Math.floor(toNumber(snapshot.growthLossWinStreak, this.growthLossWinStreak)));
+    this.options.lossStairMaxTier = Math.max(1, Math.floor(toNumber(snapshot.lossStairMaxTier, this.options.lossStairMaxTier)));
+    this.options.lossStairWinResetCount = Math.max(1, Math.floor(toNumber(snapshot.lossStairWinResetCount, this.options.lossStairWinResetCount)));
+    this.options.lossStairDebtCapPercent = clamp(toNumber(snapshot.lossStairDebtCapPercent, this.options.lossStairDebtCapPercent), 0.02, 1);
     this.options.initialStake = toOptionalNumber(snapshot.initialStake, this.options.initialStake);
     this.initialStakeUsed = Boolean(snapshot.initialStakeUsed ?? this.initialStakeUsed);
     this.martingaleLossStreak = Math.max(0, Math.floor(toNumber(snapshot.martingaleLossStreak, this.martingaleLossStreak)));
@@ -2254,7 +2463,13 @@ class DerivDigitBot extends EventEmitter {
       growthStep: this.growthMilestoneStep(),
       growthFloor: this.growthStakeFloor(),
       gateStep: this.profitGateStep(),
-      growthStairsEnabled: this.options.growthStairsEnabled,
+      growthStairMode: this.growthStairMode(),
+      growthStairsEnabled: this.growthStairsEnabled(),
+      growthLossStairTier: this.growthLossStairTier,
+      growthLossWinStreak: this.growthLossWinStreak,
+      lossStairMaxTier: this.options.lossStairMaxTier,
+      lossStairWinResetCount: this.options.lossStairWinResetCount,
+      lossStairDebtCapPercent: this.options.lossStairDebtCapPercent,
       initialStake: this.options.initialStake,
       initialStakeUsed: this.initialStakeUsed,
       martingaleLossStreak: this.martingaleLossStreak,
@@ -2323,7 +2538,8 @@ class DerivDigitBot extends EventEmitter {
       `start=${summary.startingBalance.toFixed(2)} final=${summary.finalBalance.toFixed(2)} ` +
       `net=${summary.netProfit.toFixed(2)} floor=${summary.riskFloor.toFixed(2)} debt=${summary.recoveryDebt.toFixed(2)} ` +
       `growth_tier=${summary.growthTier} growth_floor=${summary.growthFloor.toFixed(2)} ` +
-      `stairs=${summary.growthStairsEnabled ? 'on' : 'off'} ` +
+      `stairs=${summary.growthStairMode || (summary.growthStairsEnabled ? 'profit' : 'off')} ` +
+      `loss_stair=${summary.growthLossStairTier || 0}/${summary.lossStairMaxTier || 0} ` +
       `martingale_streak=${summary.martingaleLossStreak} ` +
       `split_recovery=${summary.splitRecoveryArmed ? 'on' : 'off'} ` +
       `split_remaining=${summary.splitRecoveryPiecesRemaining}/${summary.splitRecoveryPieces} ` +

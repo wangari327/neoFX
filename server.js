@@ -16,6 +16,11 @@ const io = new Server(server, {
 const PORT = Number(process.env.PORT || 3000);
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const RUN_HISTORY_LIMIT = 12;
+const GROWTH_STAIR_MODES = {
+  OFF: 'off',
+  PROFIT: 'profit',
+  LOSS_PRESSURE: 'loss_pressure'
+};
 
 function configuredMongoUrl() {
   return String(process.env.MONGODB_URL || process.env.MONGO_URL || '').trim();
@@ -58,6 +63,20 @@ function numberFrom(value, fallback) {
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
+}
+
+function normalizeGrowthStairMode(value, legacyEnabled = false) {
+  const normalized = String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (['loss', 'loss_pressure', 'loss_stairs', 'reverse', 'reverse_stairs'].includes(normalized)) {
+    return GROWTH_STAIR_MODES.LOSS_PRESSURE;
+  }
+  if (['profit', 'profit_stairs', 'growth', 'on', 'true', '1'].includes(normalized)) {
+    return GROWTH_STAIR_MODES.PROFIT;
+  }
+  if (['off', 'none', 'false', '0'].includes(normalized)) {
+    return GROWTH_STAIR_MODES.OFF;
+  }
+  return legacyEnabled ? GROWTH_STAIR_MODES.PROFIT : GROWTH_STAIR_MODES.OFF;
 }
 
 function optionalNumberFrom(value, fallback = null) {
@@ -137,6 +156,10 @@ function requireBasicAuth(req, res, next) {
 
 function publicConfig() {
   const blindSniperStartRatio = numberFrom(process.env.BLIND_SNIPER_START_RATIO, 0.75);
+  const growthStairMode = normalizeGrowthStairMode(
+    process.env.GROWTH_STAIR_MODE,
+    boolFrom(process.env.GROWTH_STAIRS_ENABLED, false)
+  );
   const blindSniperMilestones = normalizeMilestoneList(
     process.env.BLIND_SNIPER_MILESTONES,
     [0.25, 0.5, blindSniperStartRatio]
@@ -152,10 +175,14 @@ function publicConfig() {
     growthMilestonePercent: numberFrom(process.env.GROWTH_MILESTONE_PERCENT, 0.025),
     growthStakeBumpPercent: numberFrom(process.env.GROWTH_STAKE_BUMP_PERCENT, 0.15),
     growthStakeCapPercent: numberFrom(process.env.GROWTH_STAKE_CAP_PERCENT, 0.12),
+    growthStairMode,
+    growthStairsEnabled: growthStairMode !== GROWTH_STAIR_MODES.OFF,
+    lossStairMaxTier: numberFrom(process.env.LOSS_STAIR_MAX_TIER, 3),
+    lossStairWinResetCount: numberFrom(process.env.LOSS_STAIR_WIN_RESET_COUNT, 2),
+    lossStairDebtCapPercent: numberFrom(process.env.LOSS_STAIR_DEBT_CAP_PERCENT, 0.18),
     profitGatePercent: numberFrom(process.env.PROFIT_GATE_PERCENT, 0.08),
     profitAggression: clamp(numberFrom(process.env.PROFIT_AGGRESSION, 2), 1, 5),
     recoveryBufferPercent: numberFrom(process.env.RECOVERY_BUFFER_PERCENT, 0.05),
-    growthStairsEnabled: boolFrom(process.env.GROWTH_STAIRS_ENABLED, false),
     initialStake: optionalNumberFrom(process.env.INITIAL_STAKE, null),
     blindSniperEnabled: boolFrom(process.env.BLIND_SNIPER_ENABLED, false),
     blindSniperCadenceTrades: numberFrom(process.env.BLIND_SNIPER_CADENCE_TRADES, 3),
@@ -191,6 +218,14 @@ function sanitizeStartPayload(payload = {}) {
   const appId = String(process.env.DERIV_APP_ID || '').trim();
   const apiBaseUrl = String(process.env.DERIV_API_BASE_URL || 'https://api.derivws.com').trim();
   const envStartRatio = numberFrom(process.env.BLIND_SNIPER_START_RATIO, 0.75);
+  const envGrowthStairMode = normalizeGrowthStairMode(
+    process.env.GROWTH_STAIR_MODE,
+    boolFrom(process.env.GROWTH_STAIRS_ENABLED, false)
+  );
+  const growthStairMode = normalizeGrowthStairMode(
+    payload.growthStairMode ?? payload.growthStairsMode,
+    boolFrom(payload.growthStairsEnabled, envGrowthStairMode !== GROWTH_STAIR_MODES.OFF)
+  );
   const defaultBlindSniperMilestones = normalizeMilestoneList(
     process.env.BLIND_SNIPER_MILESTONES,
     [0.25, 0.5, envStartRatio]
@@ -231,10 +266,14 @@ function sanitizeStartPayload(payload = {}) {
     growthMilestonePercent: numberFrom(process.env.GROWTH_MILESTONE_PERCENT, 0.025),
     growthStakeBumpPercent: numberFrom(process.env.GROWTH_STAKE_BUMP_PERCENT, 0.15),
     growthStakeCapPercent: numberFrom(process.env.GROWTH_STAKE_CAP_PERCENT, 0.12),
+    growthStairMode,
+    growthStairsEnabled: growthStairMode !== GROWTH_STAIR_MODES.OFF,
+    lossStairMaxTier: numberFrom(payload.lossStairMaxTier, numberFrom(process.env.LOSS_STAIR_MAX_TIER, 3)),
+    lossStairWinResetCount: numberFrom(payload.lossStairWinResetCount, numberFrom(process.env.LOSS_STAIR_WIN_RESET_COUNT, 2)),
+    lossStairDebtCapPercent: numberFrom(payload.lossStairDebtCapPercent, numberFrom(process.env.LOSS_STAIR_DEBT_CAP_PERCENT, 0.18)),
     profitGatePercent: numberFrom(process.env.PROFIT_GATE_PERCENT, 0.08),
     profitAggression: clamp(numberFrom(payload.profitAggression, numberFrom(process.env.PROFIT_AGGRESSION, 2)), 1, 5),
     recoveryBufferPercent: numberFrom(process.env.RECOVERY_BUFFER_PERCENT, 0.05),
-    growthStairsEnabled: boolFrom(payload.growthStairsEnabled, boolFrom(process.env.GROWTH_STAIRS_ENABLED, false)),
     initialStake: optionalNumberFrom(payload.initialStake, optionalNumberFrom(process.env.INITIAL_STAKE, null)),
     windowSize: numberFrom(process.env.WINDOW_SIZE, 20),
     guideFilters: boolFrom(payload.guideFilters, boolFrom(process.env.GUIDE_FILTERS, false)),
@@ -275,7 +314,19 @@ function summarizeRun(run, reason = run?.reason || 'manual') {
     growthStep: Number(run.growthStep ?? 0),
     growthFloor: Number(run.growthFloor ?? 0),
     gateStep: Number(run.gateStep ?? 0),
-    growthStairsEnabled: Boolean(snapshot.growthStairsEnabled ?? run.growthStairsEnabled ?? run.config?.growthStairsEnabled ?? false),
+    growthStairMode: normalizeGrowthStairMode(
+      snapshot.growthStairMode ?? run.growthStairMode ?? run.config?.growthStairMode,
+      Boolean(snapshot.growthStairsEnabled ?? run.growthStairsEnabled ?? run.config?.growthStairsEnabled ?? false)
+    ),
+    growthStairsEnabled: normalizeGrowthStairMode(
+      snapshot.growthStairMode ?? run.growthStairMode ?? run.config?.growthStairMode,
+      Boolean(snapshot.growthStairsEnabled ?? run.growthStairsEnabled ?? run.config?.growthStairsEnabled ?? false)
+    ) !== GROWTH_STAIR_MODES.OFF,
+    growthLossStairTier: Number(snapshot.growthLossStairTier ?? run.growthLossStairTier ?? 0),
+    growthLossWinStreak: Number(snapshot.growthLossWinStreak ?? run.growthLossWinStreak ?? 0),
+    lossStairMaxTier: Number(snapshot.lossStairMaxTier ?? run.lossStairMaxTier ?? run.config?.lossStairMaxTier ?? 3),
+    lossStairWinResetCount: Number(snapshot.lossStairWinResetCount ?? run.lossStairWinResetCount ?? run.config?.lossStairWinResetCount ?? 2),
+    lossStairDebtCapPercent: Number(snapshot.lossStairDebtCapPercent ?? run.lossStairDebtCapPercent ?? run.config?.lossStairDebtCapPercent ?? 0.18),
     initialStake: snapshot.initialStake ?? run.initialStake ?? run.config?.initialStake ?? null,
     initialStakeUsed: Boolean(snapshot.initialStakeUsed ?? run.initialStakeUsed ?? run.config?.initialStakeUsed ?? false),
     martingaleLossStreak: Number(snapshot.martingaleLossStreak ?? run.martingaleLossStreak ?? 0),
@@ -353,6 +404,19 @@ function buildRunPatch(bot, runDoc, extra = {}) {
     growthTier: bot ? bot.growthTier() : runDoc?.growthTier ?? 0,
     growthStep: bot ? bot.growthMilestoneStep() : runDoc?.growthStep ?? 0,
     growthFloor: bot ? bot.growthStakeFloor() : runDoc?.growthFloor ?? 0,
+    growthStairMode: normalizeGrowthStairMode(
+      snapshot?.growthStairMode ?? runDoc?.growthStairMode ?? runDoc?.config?.growthStairMode,
+      Boolean(snapshot?.growthStairsEnabled ?? runDoc?.growthStairsEnabled ?? runDoc?.config?.growthStairsEnabled ?? false)
+    ),
+    growthStairsEnabled: normalizeGrowthStairMode(
+      snapshot?.growthStairMode ?? runDoc?.growthStairMode ?? runDoc?.config?.growthStairMode,
+      Boolean(snapshot?.growthStairsEnabled ?? runDoc?.growthStairsEnabled ?? runDoc?.config?.growthStairsEnabled ?? false)
+    ) !== GROWTH_STAIR_MODES.OFF,
+    growthLossStairTier: Number(snapshot?.growthLossStairTier ?? runDoc?.growthLossStairTier ?? 0),
+    growthLossWinStreak: Number(snapshot?.growthLossWinStreak ?? runDoc?.growthLossWinStreak ?? 0),
+    lossStairMaxTier: Number(snapshot?.lossStairMaxTier ?? runDoc?.lossStairMaxTier ?? runDoc?.config?.lossStairMaxTier ?? 3),
+    lossStairWinResetCount: Number(snapshot?.lossStairWinResetCount ?? runDoc?.lossStairWinResetCount ?? runDoc?.config?.lossStairWinResetCount ?? 2),
+    lossStairDebtCapPercent: Number(snapshot?.lossStairDebtCapPercent ?? runDoc?.lossStairDebtCapPercent ?? runDoc?.config?.lossStairDebtCapPercent ?? 0.18),
     gateStep: bot ? bot.profitGateStep() : runDoc?.gateStep ?? 0,
     goalMode: snapshot?.goalMode ?? runDoc?.goalMode ?? calibration.label,
     goalGap: Number(snapshot?.goalGap ?? runDoc?.goalGap ?? calibration.gap),
@@ -487,7 +551,19 @@ function runBalanceState(run) {
     growthStep: Number(snapshot.growthStep ?? run.growthStep ?? 0),
     growthFloor: Number(snapshot.growthFloor ?? run.growthFloor ?? 0),
     gateStep: Number(snapshot.gateStep ?? run.gateStep ?? 0),
-    growthStairsEnabled: Boolean(snapshot.growthStairsEnabled ?? run.growthStairsEnabled ?? run.config?.growthStairsEnabled ?? false),
+    growthStairMode: normalizeGrowthStairMode(
+      snapshot.growthStairMode ?? run.growthStairMode ?? run.config?.growthStairMode,
+      Boolean(snapshot.growthStairsEnabled ?? run.growthStairsEnabled ?? run.config?.growthStairsEnabled ?? false)
+    ),
+    growthStairsEnabled: normalizeGrowthStairMode(
+      snapshot.growthStairMode ?? run.growthStairMode ?? run.config?.growthStairMode,
+      Boolean(snapshot.growthStairsEnabled ?? run.growthStairsEnabled ?? run.config?.growthStairsEnabled ?? false)
+    ) !== GROWTH_STAIR_MODES.OFF,
+    growthLossStairTier: Number(snapshot.growthLossStairTier ?? run.growthLossStairTier ?? 0),
+    growthLossWinStreak: Number(snapshot.growthLossWinStreak ?? run.growthLossWinStreak ?? 0),
+    lossStairMaxTier: Number(snapshot.lossStairMaxTier ?? run.lossStairMaxTier ?? run.config?.lossStairMaxTier ?? 3),
+    lossStairWinResetCount: Number(snapshot.lossStairWinResetCount ?? run.lossStairWinResetCount ?? run.config?.lossStairWinResetCount ?? 2),
+    lossStairDebtCapPercent: Number(snapshot.lossStairDebtCapPercent ?? run.lossStairDebtCapPercent ?? run.config?.lossStairDebtCapPercent ?? 0.18),
     initialStake: snapshot.initialStake ?? run.initialStake ?? run.config?.initialStake ?? null,
     initialStakeUsed: Boolean(snapshot.initialStakeUsed ?? run.initialStakeUsed ?? run.config?.initialStakeUsed ?? false),
     martingaleLossStreak: Number(snapshot.martingaleLossStreak ?? run.martingaleLossStreak ?? 0),
@@ -690,6 +766,13 @@ function bindBot(bot) {
         growthTier: event.growthTier,
         growthStep: event.growthStep,
         growthFloor: event.growthFloor,
+        growthStairMode: event.growthStairMode,
+        growthStairsEnabled: event.growthStairsEnabled,
+        growthLossStairTier: event.growthLossStairTier,
+        growthLossWinStreak: event.growthLossWinStreak,
+        lossStairMaxTier: event.lossStairMaxTier,
+        lossStairWinResetCount: event.lossStairWinResetCount,
+        lossStairDebtCapPercent: event.lossStairDebtCapPercent,
         gateStep: event.gateStep,
         profitAggression: event.profitAggression,
         profitPushArmed: event.profitPushArmed,
@@ -804,6 +887,13 @@ async function startFreshRun(payload = {}) {
     growthTier: bot.growthTier(),
     growthStep: bot.growthMilestoneStep(),
     growthFloor: bot.growthStakeFloor(),
+    growthStairMode: initialSnapshot.growthStairMode,
+    growthStairsEnabled: initialSnapshot.growthStairsEnabled,
+    growthLossStairTier: initialSnapshot.growthLossStairTier,
+    growthLossWinStreak: initialSnapshot.growthLossWinStreak,
+    lossStairMaxTier: initialSnapshot.lossStairMaxTier,
+    lossStairWinResetCount: initialSnapshot.lossStairWinResetCount,
+    lossStairDebtCapPercent: initialSnapshot.lossStairDebtCapPercent,
     gateStep: bot.profitGateStep(),
     goalMode: initialSnapshot.goalMode,
     goalGap: initialSnapshot.goalGap,
