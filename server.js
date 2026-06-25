@@ -26,6 +26,10 @@ const DIGIT_STRATEGY_MODES = {
   EXTREME: 'extreme_over_under',
   MATCH_SNIPER: 'match_sniper'
 };
+const TARGET_SIZING_MODES = {
+  PHASED: 'phased',
+  BOLD: 'bold'
+};
 const AUTO_RISK_PROFILES = {
   SAFE: 'safe',
   BALANCED: 'balanced',
@@ -99,6 +103,14 @@ function normalizeDigitStrategyMode(value) {
     return DIGIT_STRATEGY_MODES.MATCH_SNIPER;
   }
   return DIGIT_STRATEGY_MODES.BASE;
+}
+
+function normalizeTargetSizingMode(value) {
+  const normalized = String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (['bold', 'bold_target', 'target', 'target_sizing', 'goal', 'one_shot'].includes(normalized)) {
+    return TARGET_SIZING_MODES.BOLD;
+  }
+  return TARGET_SIZING_MODES.PHASED;
 }
 
 function normalizeAutoRiskProfile(value) {
@@ -205,6 +217,8 @@ function publicConfig() {
     defaultMode: process.env.DEFAULT_MODE || 'demo',
     defaultSymbol: normalizeSymbol(process.env.SYMBOL, 'R_100'),
     digitStrategyMode: normalizeDigitStrategyMode(process.env.DIGIT_STRATEGY_MODE),
+    targetSizingMode: normalizeTargetSizingMode(process.env.TARGET_SIZING_MODE),
+    invertDigitSignal: boolFrom(process.env.INVERT_DIGIT_SIGNAL, false),
     autoModeEnabled: boolFrom(process.env.AUTO_MODE_ENABLED, false),
     autoRiskProfile: normalizeAutoRiskProfile(process.env.AUTO_RISK_PROFILE),
     autoReviewIntervalTrades: numberFrom(process.env.AUTO_REVIEW_INTERVAL_TRADES, 5),
@@ -318,7 +332,9 @@ function sanitizeStartPayload(payload = {}) {
     autoModeEnabled: boolFrom(payload.autoModeEnabled, boolFrom(process.env.AUTO_MODE_ENABLED, false)),
     autoRiskProfile: normalizeAutoRiskProfile(payload.autoRiskProfile ?? process.env.AUTO_RISK_PROFILE),
     autoReviewIntervalTrades: numberFrom(payload.autoReviewIntervalTrades, numberFrom(process.env.AUTO_REVIEW_INTERVAL_TRADES, 5)),
+    targetSizingMode: normalizeTargetSizingMode(payload.targetSizingMode ?? process.env.TARGET_SIZING_MODE),
     digitStrategyMode: normalizeDigitStrategyMode(payload.digitStrategyMode ?? process.env.DIGIT_STRATEGY_MODE),
+    invertDigitSignal: boolFrom(payload.invertDigitSignal, boolFrom(process.env.INVERT_DIGIT_SIGNAL, false)),
     matchSniperCooldownTrades: numberFrom(payload.matchSniperCooldownTrades, numberFrom(process.env.MATCH_SNIPER_COOLDOWN_TRADES, 3)),
     matchSniperMaxCount: numberFrom(payload.matchSniperMaxCount, numberFrom(process.env.MATCH_SNIPER_MAX_COUNT, 1)),
     recoveryBufferPercent: numberFrom(process.env.RECOVERY_BUFFER_PERCENT, 0.05),
@@ -357,6 +373,8 @@ function summarizeRun(run, reason = run?.reason || 'manual') {
     accountKind: snapshot.accountKind || run.accountKind || null,
     symbol: normalizeSymbol(snapshot.symbol ?? run.symbol ?? run.config?.symbol, 'R_100'),
     digitStrategyMode: normalizeDigitStrategyMode(snapshot.digitStrategyMode ?? run.digitStrategyMode ?? run.config?.digitStrategyMode),
+    targetSizingMode: normalizeTargetSizingMode(snapshot.targetSizingMode ?? run.targetSizingMode ?? run.config?.targetSizingMode),
+    invertDigitSignal: Boolean(snapshot.invertDigitSignal ?? run.invertDigitSignal ?? run.config?.invertDigitSignal ?? false),
     autoModeEnabled: Boolean(snapshot.autoModeEnabled ?? run.autoModeEnabled ?? run.config?.autoModeEnabled ?? false),
     autoRiskProfile: normalizeAutoRiskProfile(snapshot.autoRiskProfile ?? run.autoRiskProfile ?? run.config?.autoRiskProfile),
     autoState: snapshot.autoState ?? run.autoState ?? null,
@@ -399,6 +417,7 @@ function summarizeRun(run, reason = run?.reason || 'manual') {
     splitRecoveryPieces: Number(snapshot.splitRecoveryPieces ?? run.splitRecoveryPieces ?? 2),
     splitRecoveryCapPercent: Number(snapshot.splitRecoveryCapPercent ?? run.splitRecoveryCapPercent ?? 0.22),
     goalMode: snapshot.goalMode ?? run.goalMode ?? calibration.label,
+    boldTargetStake: Number(snapshot.boldTargetStake ?? run.boldTargetStake ?? 0),
     goalGap: Number(snapshot.goalGap ?? run.goalGap ?? calibration.gap),
     goalGapRatio: Number(snapshot.goalGapRatio ?? run.goalGapRatio ?? calibration.gapRatio),
     profitAggression: Number(snapshot.profitAggression ?? run.profitAggression ?? run.config?.profitAggression ?? 2),
@@ -457,6 +476,8 @@ function buildRunPatch(bot, runDoc, extra = {}) {
     accountKind: snapshot ? snapshot.accountKind : runDoc?.accountKind ?? null,
     symbol: normalizeSymbol(snapshot?.symbol ?? runDoc?.symbol ?? runDoc?.config?.symbol, 'R_100'),
     digitStrategyMode: normalizeDigitStrategyMode(snapshot?.digitStrategyMode ?? runDoc?.digitStrategyMode ?? runDoc?.config?.digitStrategyMode),
+    targetSizingMode: normalizeTargetSizingMode(snapshot?.targetSizingMode ?? runDoc?.targetSizingMode ?? runDoc?.config?.targetSizingMode),
+    invertDigitSignal: Boolean(snapshot?.invertDigitSignal ?? runDoc?.invertDigitSignal ?? runDoc?.config?.invertDigitSignal ?? false),
     autoModeEnabled: Boolean(snapshot?.autoModeEnabled ?? runDoc?.autoModeEnabled ?? runDoc?.config?.autoModeEnabled ?? false),
     autoRiskProfile: normalizeAutoRiskProfile(snapshot?.autoRiskProfile ?? runDoc?.autoRiskProfile ?? runDoc?.config?.autoRiskProfile),
     autoState: snapshot?.autoState ?? runDoc?.autoState ?? null,
@@ -493,6 +514,7 @@ function buildRunPatch(bot, runDoc, extra = {}) {
     lossStairDebtCapPercent: Number(snapshot?.lossStairDebtCapPercent ?? runDoc?.lossStairDebtCapPercent ?? runDoc?.config?.lossStairDebtCapPercent ?? 0.18),
     gateStep: bot ? bot.profitGateStep() : runDoc?.gateStep ?? 0,
     goalMode: snapshot?.goalMode ?? runDoc?.goalMode ?? calibration.label,
+    boldTargetStake: Number(snapshot?.boldTargetStake ?? runDoc?.boldTargetStake ?? 0),
     goalGap: Number(snapshot?.goalGap ?? runDoc?.goalGap ?? calibration.gap),
     goalGapRatio: Number(snapshot?.goalGapRatio ?? runDoc?.goalGapRatio ?? calibration.gapRatio),
     profitAggression: Number(snapshot?.profitAggression ?? runDoc?.profitAggression ?? runDoc?.config?.profitAggression ?? 2),
@@ -615,6 +637,8 @@ function runBalanceState(run) {
     phase,
     symbol: normalizeSymbol(snapshot.symbol ?? run.symbol ?? run.config?.symbol, 'R_100'),
     digitStrategyMode: normalizeDigitStrategyMode(snapshot.digitStrategyMode ?? run.digitStrategyMode ?? run.config?.digitStrategyMode),
+    targetSizingMode: normalizeTargetSizingMode(snapshot.targetSizingMode ?? run.targetSizingMode ?? run.config?.targetSizingMode),
+    invertDigitSignal: Boolean(snapshot.invertDigitSignal ?? run.invertDigitSignal ?? run.config?.invertDigitSignal ?? false),
     autoModeEnabled: Boolean(snapshot.autoModeEnabled ?? run.autoModeEnabled ?? run.config?.autoModeEnabled ?? false),
     autoRiskProfile: normalizeAutoRiskProfile(snapshot.autoRiskProfile ?? run.autoRiskProfile ?? run.config?.autoRiskProfile),
     autoState: snapshot.autoState ?? run.autoState ?? null,
@@ -664,6 +688,7 @@ function runBalanceState(run) {
     splitRecoveryPieces: Number(snapshot.splitRecoveryPieces ?? run.splitRecoveryPieces ?? 2),
     splitRecoveryCapPercent: Number(snapshot.splitRecoveryCapPercent ?? run.splitRecoveryCapPercent ?? 0.22),
     goalMode: snapshot.goalMode ?? run.goalMode ?? calibration.label,
+    boldTargetStake: Number(snapshot.boldTargetStake ?? run.boldTargetStake ?? 0),
     goalGap: Number(snapshot.goalGap ?? run.goalGap ?? calibration.gap),
     goalGapRatio: Number(snapshot.goalGapRatio ?? run.goalGapRatio ?? calibration.gapRatio),
     profitAggression: Number(snapshot.profitAggression ?? run.profitAggression ?? run.config?.profitAggression ?? 2),
@@ -848,6 +873,8 @@ function bindBot(bot) {
         phase: event.phase,
         symbol: event.symbol,
         digitStrategyMode: event.digitStrategyMode,
+        targetSizingMode: event.targetSizingMode,
+        invertDigitSignal: event.invertDigitSignal,
         autoModeEnabled: event.autoModeEnabled,
         autoRiskProfile: event.autoRiskProfile,
         autoState: event.autoState,
@@ -876,6 +903,7 @@ function bindBot(bot) {
         lossStairWinResetCount: event.lossStairWinResetCount,
         lossStairDebtCapPercent: event.lossStairDebtCapPercent,
         gateStep: event.gateStep,
+        boldTargetStake: event.boldTargetStake,
         profitAggression: event.profitAggression,
         profitPushArmed: event.profitPushArmed,
         profitPushReason: event.profitPushReason,
@@ -972,6 +1000,8 @@ async function startFreshRun(payload = {}) {
     mode: config.mode,
     symbol: config.symbol,
     digitStrategyMode: config.digitStrategyMode,
+    targetSizingMode: config.targetSizingMode,
+    invertDigitSignal: config.invertDigitSignal,
     autoModeEnabled: initialSnapshot.autoModeEnabled,
     autoRiskProfile: initialSnapshot.autoRiskProfile,
     autoState: initialSnapshot.autoState,

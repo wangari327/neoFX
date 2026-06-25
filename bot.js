@@ -28,6 +28,11 @@ const DIGIT_STRATEGY_MODES = {
   MATCH_SNIPER: 'match_sniper'
 };
 
+const TARGET_SIZING_MODES = {
+  PHASED: 'phased',
+  BOLD: 'bold'
+};
+
 const AUTO_RISK_PROFILES = {
   SAFE: 'safe',
   BALANCED: 'balanced',
@@ -64,6 +69,7 @@ const CONFIDENCE_THROTTLE_MAX_MS = 12000;
 const BLIND_SNIPER_PROFIT_CAP_FRACTION = 0.25;
 const BLIND_SNIPER_PROGRESS_TAPER_FLOOR = 0.2;
 const DEFAULT_DIGIT_WIN_PROFIT_RATIO = 0.22;
+const DEFAULT_DIGIT_DIFF_WIN_PROFIT_RATIO = 0.09;
 const PROFIT_AGGRESSION_DEFAULT = 2;
 const GROWTH_STAIR_MODES = {
   OFF: 'off',
@@ -113,6 +119,14 @@ function normalizeDigitStrategyMode(value) {
     return DIGIT_STRATEGY_MODES.MATCH_SNIPER;
   }
   return DIGIT_STRATEGY_MODES.BASE;
+}
+
+function normalizeTargetSizingMode(value) {
+  const normalized = String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (['bold', 'bold_target', 'target', 'target_sizing', 'goal', 'one_shot'].includes(normalized)) {
+    return TARGET_SIZING_MODES.BOLD;
+  }
+  return TARGET_SIZING_MODES.PHASED;
 }
 
 function normalizeAutoRiskProfile(value) {
@@ -168,6 +182,46 @@ function digitMatchCondition(digit) {
     losingDigits: Array.from({ length: 10 }, (_, value) => value).filter((value) => value !== resolvedDigit),
     strategyMode: DIGIT_STRATEGY_MODES.MATCH_SNIPER,
     wins: (exitDigit) => exitDigit === resolvedDigit
+  };
+}
+
+function digitDiffCondition(digit) {
+  const resolvedDigit = Number(digit);
+  return {
+    id: `diff_${resolvedDigit}`,
+    label: `Differs ${resolvedDigit}`,
+    contractType: 'DIGITDIFF',
+    barrier: String(resolvedDigit),
+    entryDigit: resolvedDigit,
+    losingDigits: [resolvedDigit],
+    strategyMode: DIGIT_STRATEGY_MODES.MATCH_SNIPER,
+    wins: (exitDigit) => exitDigit !== resolvedDigit
+  };
+}
+
+function invertDigitCondition(condition) {
+  if (!condition) return null;
+
+  const barrier = Number(condition.barrier);
+  let inverted = null;
+  if (condition.contractType === 'DIGITOVER') {
+    inverted = digitUnderCondition(barrier + 1, `Under ${barrier + 1}`);
+  } else if (condition.contractType === 'DIGITUNDER') {
+    inverted = digitOverCondition(barrier - 1, `Over ${barrier - 1}`);
+  } else if (condition.contractType === 'DIGITMATCH') {
+    inverted = digitDiffCondition(barrier);
+  } else if (condition.contractType === 'DIGITDIFF') {
+    inverted = digitMatchCondition(barrier);
+  }
+
+  if (!inverted) return condition;
+  return {
+    ...inverted,
+    id: `invert_${condition.id}_to_${inverted.id}`,
+    label: `Invert: ${inverted.label}`,
+    sourceConditionId: condition.id,
+    sourceConditionLabel: condition.label,
+    inverted: true
   };
 }
 
@@ -314,7 +368,9 @@ class DerivDigitBot extends EventEmitter {
       autoModeEnabled: options.autoModeEnabled === true,
       autoRiskProfile: normalizeAutoRiskProfile(options.autoRiskProfile),
       autoReviewIntervalTrades: Math.max(1, Math.floor(toNumber(options.autoReviewIntervalTrades, 5))),
+      targetSizingMode: normalizeTargetSizingMode(options.targetSizingMode ?? options.goalSizingMode),
       digitStrategyMode: normalizeDigitStrategyMode(options.digitStrategyMode ?? options.highRiskDigitMode),
+      invertDigitSignal: options.invertDigitSignal === true,
       matchSniperCooldownTrades: Math.max(1, Math.floor(toNumber(options.matchSniperCooldownTrades, 3))),
       matchSniperMaxCount: Math.max(0, Math.floor(toNumber(options.matchSniperMaxCount, 1))),
       recoveryBufferPercent: toNumber(options.recoveryBufferPercent, 0.05),
@@ -355,6 +411,8 @@ class DerivDigitBot extends EventEmitter {
     this.autoBaseConfig = {
       symbol: this.options.symbol,
       digitStrategyMode: this.options.digitStrategyMode,
+      targetSizingMode: this.options.targetSizingMode,
+      invertDigitSignal: this.options.invertDigitSignal,
       profitAggression: this.options.profitAggression,
       growthStairMode: this.options.growthStairMode,
       blindSniperEnabled: this.options.blindSniperEnabled,
@@ -754,6 +812,8 @@ class DerivDigitBot extends EventEmitter {
       phase: this.phase,
       symbol: this.options.symbol,
       digitStrategyMode: this.options.digitStrategyMode,
+      targetSizingMode: this.targetSizingMode(),
+      invertDigitSignal: this.options.invertDigitSignal,
       autoModeEnabled: this.options.autoModeEnabled,
       autoRiskProfile: this.options.autoRiskProfile,
       autoState: this.autoState,
@@ -883,15 +943,22 @@ class DerivDigitBot extends EventEmitter {
 
   strategyFallbackProfitRatio() {
     const mode = normalizeDigitStrategyMode(this.options.digitStrategyMode);
-    if (mode === DIGIT_STRATEGY_MODES.MATCH_SNIPER) return this.options.symbol === 'R_10' ? 7.7 : 7.33;
-    if (mode === DIGIT_STRATEGY_MODES.EXTREME) return this.options.symbol === 'R_10' ? 3.65 : 3.55;
+    const highRiskRatio = this.options.symbol === 'R_10' ? 3.65 : 3.55;
+    const matchRatio = this.options.symbol === 'R_10' ? 7.7 : 7.33;
+    if (this.options.invertDigitSignal) {
+      if (mode === DIGIT_STRATEGY_MODES.MATCH_SNIPER) return DEFAULT_DIGIT_DIFF_WIN_PROFIT_RATIO;
+      if (mode === DIGIT_STRATEGY_MODES.EXTREME) return DEFAULT_DIGIT_WIN_PROFIT_RATIO;
+      return highRiskRatio;
+    }
+    if (mode === DIGIT_STRATEGY_MODES.MATCH_SNIPER) return matchRatio;
+    if (mode === DIGIT_STRATEGY_MODES.EXTREME) return highRiskRatio;
     return DEFAULT_DIGIT_WIN_PROFIT_RATIO;
   }
 
   estimatedWinProfitRatio() {
     return clamp(
       toNumber(this.lastProposalProfitRatio, toNumber(this.lastWinProfitRatio, this.strategyFallbackProfitRatio())),
-      0.12,
+      0.05,
       10
     );
   }
@@ -1397,7 +1464,8 @@ class DerivDigitBot extends EventEmitter {
 
     return {
       compact,
-      label: compact ? 'compact' : 'standard',
+      label: this.boldTargetSizingEnabled() ? 'bold' : compact ? 'compact' : 'standard',
+      targetSizingMode: this.targetSizingMode(),
       gap,
       gapRatio,
       profitAggression: this.options.profitAggression,
@@ -1431,6 +1499,7 @@ class DerivDigitBot extends EventEmitter {
       emergencyRecoveryGapFraction: compact ? 0.35 + aggression * 0.15 : 0.5,
       emergencyRecoveryStakeMultiplier: compact ? 1.05 + aggression * 0.35 : 1.1 + aggression * 0.45,
       riskCooldownScale: 1 - aggression * 0.35,
+      boldStake: this.boldTargetStake(),
       estimatedWinProfitRatio: this.estimatedWinProfitRatio()
     };
   }
@@ -1459,6 +1528,14 @@ class DerivDigitBot extends EventEmitter {
 
   effectiveGrowthBalance() {
     return roundMoney(this.balance);
+  }
+
+  targetSizingMode() {
+    return normalizeTargetSizingMode(this.options.targetSizingMode);
+  }
+
+  boldTargetSizingEnabled() {
+    return this.targetSizingMode() === TARGET_SIZING_MODES.BOLD;
   }
 
   currentRecoveryDebt() {
@@ -1648,6 +1725,27 @@ class DerivDigitBot extends EventEmitter {
     return this.normalizeStake(rawStake, capPercent);
   }
 
+  boldTargetStake() {
+    const remainingGap = Math.max(0, this.options.target - this.effectiveGrowthBalance());
+    if (remainingGap <= 0) return 0;
+
+    const winRatio = Math.max(0.01, this.estimatedWinProfitRatio());
+    const stakeToTarget = remainingGap / winRatio;
+    return this.normalizeStake(stakeToTarget, 1);
+  }
+
+  boldTargetState() {
+    const stake = this.boldTargetStake();
+    const remainingGap = Math.max(0, this.options.target - this.effectiveGrowthBalance());
+    return {
+      armed: stake >= this.options.minStake && remainingGap > 0,
+      stake,
+      remainingGap,
+      winRatio: this.estimatedWinProfitRatio(),
+      targetSizingMode: this.targetSizingMode()
+    };
+  }
+
   emergencyRecoveryStake(calibration = this.goalCalibration()) {
     const debt = this.currentRecoveryDebt();
     if (debt <= 0) return 0;
@@ -1819,7 +1917,8 @@ class DerivDigitBot extends EventEmitter {
   contractToResult(contract, condition, stake) {
     const exitQuote = contract.exit_tick || contract.sell_spot || contract.current_spot;
     const digit = quoteToDigit(exitQuote, this.lastPipSize);
-    const profit = roundMoney(toNumber(contract.profit, condition.wins(digit) ? stake * 0.2 : -stake));
+    const fallbackWinProfit = stake * this.estimatedWinProfitRatio();
+    const profit = roundMoney(toNumber(contract.profit, condition.wins(digit) ? fallbackWinProfit : -stake));
     const won = contract.status === 'won' || profit > 0;
 
     return {
@@ -1951,13 +2050,16 @@ class DerivDigitBot extends EventEmitter {
 
   selectCondition(currentDigit, { ignoreGuideFilters = false } = {}) {
     const mode = normalizeDigitStrategyMode(this.options.digitStrategyMode);
+    let condition = null;
     if (mode === DIGIT_STRATEGY_MODES.EXTREME) {
-      return this.selectExtremeCondition(currentDigit, { ignoreGuideFilters });
+      condition = this.selectExtremeCondition(currentDigit, { ignoreGuideFilters });
+    } else if (mode === DIGIT_STRATEGY_MODES.MATCH_SNIPER) {
+      condition = this.selectMatchSniperCondition(currentDigit, { ignoreGuideFilters });
+    } else {
+      condition = this.selectBaseCondition(currentDigit, { ignoreGuideFilters });
     }
-    if (mode === DIGIT_STRATEGY_MODES.MATCH_SNIPER) {
-      return this.selectMatchSniperCondition(currentDigit, { ignoreGuideFilters });
-    }
-    return this.selectBaseCondition(currentDigit, { ignoreGuideFilters });
+
+    return this.options.invertDigitSignal ? invertDigitCondition(condition) : condition;
   }
 
   selectBaseCondition(currentDigit, { ignoreGuideFilters = false } = {}) {
@@ -2131,6 +2233,20 @@ class DerivDigitBot extends EventEmitter {
 
     const calibration = this.goalCalibration();
     const confidenceGate = this.confidenceGateState();
+
+    if (this.boldTargetSizingEnabled()) {
+      const boldTarget = this.boldTargetState();
+      if (!boldTarget.armed) {
+        this.stop('take_profit');
+        return null;
+      }
+      return {
+        kind: 'bold_target',
+        stake: boldTarget.stake,
+        boldTarget
+      };
+    }
+
     const emergencyAllIn = this.emergencyAllInState();
     if (emergencyAllIn.armed) {
       return {
@@ -2437,6 +2553,11 @@ class DerivDigitBot extends EventEmitter {
     }
 
     this.balance = roundMoney(this.balance + result.profit);
+    if (plan.kind === 'bold_target' || this.boldTargetSizingEnabled()) {
+      this.recoveryDebt = 0;
+      this.riskFloor = roundMoney(this.balance);
+      this.growthAnchorBalance = this.riskFloor;
+    }
     this.updateLossPressureStairs(plan, result);
     const confidenceGate = this.confidenceGateState();
     const sniperState = this.blindSniperState(confidenceGate);
@@ -2459,6 +2580,8 @@ class DerivDigitBot extends EventEmitter {
       plan: plan.kind,
       symbol: this.options.symbol,
       digitStrategyMode: this.options.digitStrategyMode,
+      targetSizingMode: this.targetSizingMode(),
+      invertDigitSignal: this.options.invertDigitSignal,
       autoModeEnabled: this.options.autoModeEnabled,
       autoRiskProfile: this.options.autoRiskProfile,
       autoState: this.autoState,
@@ -2473,6 +2596,7 @@ class DerivDigitBot extends EventEmitter {
       recoveryDebt: this.currentRecoveryDebt(),
       gateStep: this.profitGateStep(),
       goalMode: calibration.label,
+      boldTargetStake: calibration.boldStake,
       goalGap: calibration.gap,
       goalGapRatio: calibration.gapRatio,
       profitAggression: this.options.profitAggression,
@@ -2587,6 +2711,29 @@ class DerivDigitBot extends EventEmitter {
     }
 
     const calibration = this.goalCalibration();
+
+    if (plan.kind === 'bold_target' || this.boldTargetSizingEnabled()) {
+      this.recoveryDebt = 0;
+      this.riskFloor = roundMoney(this.balance);
+      this.growthAnchorBalance = this.riskFloor;
+      this.martingaleLossStreak = 0;
+      this.emergencyAllInUsed = false;
+      this.clearSplitRecovery(null);
+      this.resetGrowthLossStairs();
+
+      if (this.balance < this.options.minStake) {
+        this.stop('insufficient_session_balance');
+        return;
+      }
+      if (!result.won && this.balance < this.options.seed * 0.5) {
+        this.stop('stop_loss');
+        return;
+      }
+      if (this.phase !== PHASES.GROWTH) {
+        this.changePhase(PHASES.GROWTH, result.won ? 'bold_target_continues' : 'bold_target_loss_continue');
+      }
+      return;
+    }
 
     if (result.won) {
       this.martingaleLossStreak = 0;
@@ -2794,6 +2941,8 @@ class DerivDigitBot extends EventEmitter {
       balance: this.balance,
       symbol: this.options.symbol,
       digitStrategyMode: this.options.digitStrategyMode,
+      targetSizingMode: this.targetSizingMode(),
+      invertDigitSignal: this.options.invertDigitSignal,
       ...this.autoTelemetry(),
       riskFloor: this.riskFloor,
       recoveryDebt: this.currentRecoveryDebt(),
@@ -2843,6 +2992,7 @@ class DerivDigitBot extends EventEmitter {
       splitRecoveryPieces: this.options.splitRecoveryPieces,
       splitRecoveryCapPercent: calibration.splitRecoveryCapPercent,
       goalMode: calibration.label,
+      boldTargetStake: calibration.boldStake,
       goalGap: calibration.gap,
       goalGapRatio: calibration.gapRatio,
       profitAggression: this.options.profitAggression,
@@ -2871,6 +3021,8 @@ class DerivDigitBot extends EventEmitter {
       phase: this.phase,
       symbol: this.options.symbol,
       digitStrategyMode: this.options.digitStrategyMode,
+      targetSizingMode: this.targetSizingMode(),
+      invertDigitSignal: this.options.invertDigitSignal,
       ...this.autoTelemetry(),
       seed: this.options.seed,
       target: this.options.target,
@@ -2927,6 +3079,7 @@ class DerivDigitBot extends EventEmitter {
       splitRecoveryPieces: this.options.splitRecoveryPieces,
       splitRecoveryCapPercent: calibration.splitRecoveryCapPercent,
       goalMode: calibration.label,
+      boldTargetStake: calibration.boldStake,
       goalGap: calibration.gap,
       goalGapRatio: calibration.gapRatio,
       profitAggression: this.options.profitAggression,
@@ -2960,6 +3113,8 @@ class DerivDigitBot extends EventEmitter {
       accountKind: this.accountKind,
       symbol: this.options.symbol,
       digitStrategyMode: this.options.digitStrategyMode,
+      targetSizingMode: this.targetSizingMode(),
+      invertDigitSignal: this.options.invertDigitSignal,
       ...this.autoTelemetry(),
       phase: this.phase,
       seed: this.options.seed,
@@ -3004,6 +3159,7 @@ class DerivDigitBot extends EventEmitter {
       splitRecoveryPieces: this.options.splitRecoveryPieces,
       splitRecoveryCapPercent: calibration.splitRecoveryCapPercent,
       goalMode: calibration.label,
+      boldTargetStake: calibration.boldStake,
       goalGap: calibration.gap,
       goalGapRatio: calibration.gapRatio,
       tradeCooldownUntil: this.tradeCooldownUntil,
@@ -3031,6 +3187,8 @@ class DerivDigitBot extends EventEmitter {
       phase: this.phase,
       symbol: this.options.symbol,
       digitStrategyMode: this.options.digitStrategyMode,
+      targetSizingMode: this.targetSizingMode(),
+      invertDigitSignal: this.options.invertDigitSignal,
       ...this.autoTelemetry(),
       riskFloor: this.riskFloor,
       recoveryDebt: this.currentRecoveryDebt(),
@@ -3075,6 +3233,7 @@ class DerivDigitBot extends EventEmitter {
       splitRecoveryPieces: this.options.splitRecoveryPieces,
       splitRecoveryCapPercent: calibration.splitRecoveryCapPercent,
       goalMode: calibration.label,
+      boldTargetStake: calibration.boldStake,
       goalGap: calibration.gap,
       goalGapRatio: calibration.gapRatio,
       profitAggression: this.options.profitAggression,
@@ -3124,6 +3283,8 @@ class DerivDigitBot extends EventEmitter {
     this.phase = snapshot.phase || this.phase;
     this.options.symbol = normalizeSymbol(snapshot.symbol, this.options.symbol);
     this.options.digitStrategyMode = normalizeDigitStrategyMode(snapshot.digitStrategyMode ?? this.options.digitStrategyMode);
+    this.options.targetSizingMode = normalizeTargetSizingMode(snapshot.targetSizingMode ?? this.options.targetSizingMode);
+    this.options.invertDigitSignal = Boolean(snapshot.invertDigitSignal ?? this.options.invertDigitSignal);
     this.options.autoModeEnabled = Boolean(snapshot.autoModeEnabled ?? this.options.autoModeEnabled);
     this.options.autoRiskProfile = normalizeAutoRiskProfile(snapshot.autoRiskProfile ?? this.options.autoRiskProfile);
     this.options.autoReviewIntervalTrades = Math.max(1, Math.floor(toNumber(snapshot.autoReviewIntervalTrades, this.options.autoReviewIntervalTrades)));
@@ -3236,6 +3397,8 @@ class DerivDigitBot extends EventEmitter {
       accountKind: this.accountKind,
       symbol: this.options.symbol,
       digitStrategyMode: this.options.digitStrategyMode,
+      targetSizingMode: this.targetSizingMode(),
+      invertDigitSignal: this.options.invertDigitSignal,
       ...this.autoTelemetry(),
       riskFloor: this.riskFloor,
       recoveryDebt: this.currentRecoveryDebt(),
@@ -3263,6 +3426,7 @@ class DerivDigitBot extends EventEmitter {
       splitRecoveryPieces: this.options.splitRecoveryPieces,
       splitRecoveryCapPercent: calibration.splitRecoveryCapPercent,
       goalMode: calibration.label,
+      boldTargetStake: calibration.boldStake,
       goalGap: calibration.gap,
       goalGapRatio: calibration.gapRatio,
       profitAggression: this.options.profitAggression,

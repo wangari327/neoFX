@@ -7,7 +7,7 @@ The bot has no paper-trading simulator. It connects to Deriv and can run against
 ## What It Implements
 
 - Node.js, `ws`, `express`, `socket.io`, no frontend framework, no TypeScript.
-- Dashboard inputs for a single Deriv authorization token, optional account ID, seed, target, demo/real mode, volatility index, digit strategy mode, guide filters, strict bar filters, growth stairs, optional initial stake, profit aggression, and blind sniper settings.
+- Dashboard inputs for a single Deriv authorization token, optional account ID, seed, target, demo/real mode, volatility index, target sizing mode, digit strategy mode, invert signal, guide filters, strict bar filters, growth stairs, optional initial stake, profit aggression, and blind sniper settings.
 - Demo/real mode selects which account type the bot requests from Deriv. If you pin an account ID, it must match the selected mode.
 - The dashboard shows both the live Deriv account balance and the bot's session equity, so you can tell real funds from the seed-based strategy ledger.
 - The dashboard also shows live analysis status, so you can see whether the bot is warming up, waiting for a setup, or already in a trade.
@@ -26,7 +26,9 @@ The bot has no paper-trading simulator. It connects to Deriv and can run against
 - The dashboard includes an Auto decision ticker and a compact Auto log so you can see why Auto changed symbol, strategy, sniper, stairs, or aggression.
 - Optional blind sniper overlay supports any number of comma-separated progress marks, including negative recovery marks. Each mark is one possible shot, with stake caps near the target so small-profit runs are not broken by a one-third-balance shot.
 - Volatility index selector supports `R_100` and `R_10`.
+- Target sizing selector supports the normal phased engine and experimental Bold-to-target sizing.
 - Digit strategy selector supports the base Over 1 / Under 8 loop plus high-payout experimental modes.
+- Invert digit signal flips the selected contract after the strategy chooses it. For example, base `Over 1` becomes `Under 2`, base `Under 8` becomes `Over 7`, high-risk `Over 7` becomes `Under 8`, and Digit Match becomes Digit Differs.
 - Base contracts: `DIGITOVER` barrier `1`, and `DIGITUNDER` barrier `8`.
 - Last 20 digits are tracked. The bot chooses whichever condition has hit less often recently.
 - Optional guide filters based on the attached Over-market notes:
@@ -53,6 +55,11 @@ Live proposal comparison from the same sample:
 That makes `R_10` the better payout selector in the current sample, but the bot still treats both as selectable because market availability, timing, and actual tick behavior matter more than a one-time quote.
 
 The extreme selector no longer uses the base strategy's "cooler side" rule. That rule is useful for avoiding crowded losing digits on the 80-percent style base contracts, but it is backwards for Over 7 / Under 2. Extreme mode now estimates the contract break-even hit rate from payout, then requires the winning side to be hot enough in the 20-digit, 10-digit, and 5-digit windows before it will enter.
+
+## Target Sizing Modes
+
+- Phased engine: the existing growth, profit-push, risky-jump, recovery, stairs, and optional sniper state machine.
+- Bold to target: stakes from the remaining target gap divided by the current observed payout ratio, capped at the current session balance. It bypasses martingale, stairs, snipers, and risky jumps so the run is a cleaner target-or-stop test. Use demo first; this mode can stake a large part of the session when the remaining target gap is large relative to payout.
 
 ## Auto Mode
 
@@ -203,7 +210,9 @@ PROFIT_AGGRESSION=2
 AUTO_MODE_ENABLED=false
 AUTO_RISK_PROFILE=balanced
 AUTO_REVIEW_INTERVAL_TRADES=5
+TARGET_SIZING_MODE=phased
 DIGIT_STRATEGY_MODE=base
+INVERT_DIGIT_SIGNAL=false
 MATCH_SNIPER_COOLDOWN_TRADES=3
 MATCH_SNIPER_MAX_COUNT=1
 RECOVERY_BUFFER_PERCENT=0.05

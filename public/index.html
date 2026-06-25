@@ -1061,6 +1061,15 @@
             <div class="field-help">The base equity-to-target loop always runs. Guide filters, growth stairs, and sniper shots are optional overlays.</div>
 
             <div class="field">
+              <label for="targetSizingMode">Target sizing</label>
+              <select id="targetSizingMode">
+                <option value="phased">Phased engine</option>
+                <option value="bold">Bold to target</option>
+              </select>
+              <div class="field-help">Bold mode stakes from the remaining target gap and bypasses martingale, stairs, snipes, and risky jumps for a cleaner target-or-stop test.</div>
+            </div>
+
+            <div class="field">
               <label for="digitStrategyMode">Digit strategy</label>
               <select id="digitStrategyMode">
                 <option value="base">Base Over 1 / Under 8</option>
@@ -1068,6 +1077,11 @@
                 <option value="match_sniper">Blast: Digit Match Sniper</option>
               </select>
               <div class="field-help">High-risk modes use lower hit-rate contracts with much higher payout. Test on demo first.</div>
+            </div>
+
+            <div class="switch-row">
+              <label for="invertDigitSignal" title="Flip the selected digit contract after the strategy picks it. Useful when you want to fade the current setup.">Invert digit signal</label>
+              <input id="invertDigitSignal" type="checkbox">
             </div>
 
             <div class="switch-row">
@@ -1272,7 +1286,9 @@
       autoMode: document.getElementById('autoMode'),
       autoRiskProfile: document.getElementById('autoRiskProfile'),
       symbol: document.getElementById('symbol'),
+      targetSizingMode: document.getElementById('targetSizingMode'),
       digitStrategyMode: document.getElementById('digitStrategyMode'),
+      invertDigitSignal: document.getElementById('invertDigitSignal'),
       guideFilters: document.getElementById('guideFilters'),
       strictBars: document.getElementById('strictBars'),
       growthStairMode: document.getElementById('growthStairMode'),
@@ -1343,7 +1359,9 @@
     let currentSeed = Number(el.seed.value);
     let currentTarget = Number(el.target.value);
     let currentSymbol = 'R_100';
+    let currentTargetSizingMode = 'phased';
     let currentDigitStrategyMode = 'base';
+    let currentInvertDigitSignal = false;
     let currentAutoModeEnabled = false;
     let currentAutoRiskProfile = 'balanced';
     let currentWindowSize = 20;
@@ -1422,6 +1440,12 @@
       return 'base';
     }
 
+    function normalizeTargetSizingMode(value) {
+      const normalized = String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+      if (['bold', 'bold_target', 'target', 'target_sizing', 'goal', 'one_shot'].includes(normalized)) return 'bold';
+      return 'phased';
+    }
+
     function normalizeAutoRiskProfile(value) {
       const normalized = String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
       if (['safe', 'conservative', 'low'].includes(normalized)) return 'safe';
@@ -1442,6 +1466,10 @@
       if (mode === 'extreme_over_under') return 'High risk Over 7 / Under 2';
       if (mode === 'match_sniper') return 'Blast Match Sniper';
       return 'Base Over 1 / Under 8';
+    }
+
+    function targetSizingLabel(value) {
+      return normalizeTargetSizingMode(value) === 'bold' ? 'Bold target' : 'Phased engine';
     }
 
     function autoRiskLabel(value) {
@@ -1672,7 +1700,9 @@
         autoModeEnabled: Boolean(el.autoMode.checked),
         autoRiskProfile: normalizeAutoRiskProfile(el.autoRiskProfile.value),
         symbol: normalizeSymbol(el.symbol.value),
+        targetSizingMode: normalizeTargetSizingMode(el.targetSizingMode.value),
         digitStrategyMode: normalizeDigitStrategyMode(el.digitStrategyMode.value),
+        invertDigitSignal: Boolean(el.invertDigitSignal.checked),
         seed,
         target,
         guideFilters: Boolean(el.guideFilters.checked),
@@ -1704,8 +1734,14 @@
       if (Object.prototype.hasOwnProperty.call(values, 'symbol')) {
         el.symbol.value = normalizeSymbol(values.symbol);
       }
+      if (Object.prototype.hasOwnProperty.call(values, 'targetSizingMode')) {
+        el.targetSizingMode.value = normalizeTargetSizingMode(values.targetSizingMode);
+      }
       if (Object.prototype.hasOwnProperty.call(values, 'digitStrategyMode')) {
         el.digitStrategyMode.value = normalizeDigitStrategyMode(values.digitStrategyMode);
+      }
+      if (Object.prototype.hasOwnProperty.call(values, 'invertDigitSignal')) {
+        el.invertDigitSignal.checked = Boolean(values.invertDigitSignal);
       }
       if (Object.prototype.hasOwnProperty.call(values, 'seed')) {
         el.seed.value = roundInputNumber(values.seed, currentSeed);
@@ -1748,7 +1784,9 @@
       currentAutoModeEnabled = Boolean(el.autoMode.checked);
       currentAutoRiskProfile = normalizeAutoRiskProfile(el.autoRiskProfile.value);
       currentSymbol = normalizeSymbol(el.symbol.value);
+      currentTargetSizingMode = normalizeTargetSizingMode(el.targetSizingMode.value);
       currentDigitStrategyMode = normalizeDigitStrategyMode(el.digitStrategyMode.value);
+      currentInvertDigitSignal = Boolean(el.invertDigitSignal.checked);
       currentGrowthStairMode = normalizeGrowthStairMode(el.growthStairMode.value);
       currentGrowthStairsEnabled = currentGrowthStairMode !== 'off';
       currentInitialStake = parseOptionalNumber(el.initialStake.value, null);
@@ -1765,7 +1803,7 @@
       resetEquityTrail();
       el.gateStepText.textContent = `Gate step ${money(previewGateStep(currentSeed, currentTarget, currentProfitAggression))}`;
       el.autoText.textContent = currentAutoModeEnabled ? `Auto ${autoRiskLabel(currentAutoRiskProfile)}` : 'Auto off';
-      el.strategyText.textContent = `${currentSymbol} · ${digitStrategyLabel(currentDigitStrategyMode)}`;
+      el.strategyText.textContent = `${currentSymbol} - ${targetSizingLabel(currentTargetSizingMode)} - ${digitStrategyLabel(currentDigitStrategyMode)}${currentInvertDigitSignal ? ' - inverted' : ''}`;
       el.aggressionText.textContent = `Aggression ${currentProfitAggression}/5`;
       el.growthFloorText.textContent = `Growth floor ${money(currentMinStake)}`;
     }
@@ -1920,6 +1958,12 @@
         ? Number(event.goalGapRatio)
         : inferredGapRatio;
       const mode = String(event && event.goalMode ? event.goalMode : '').toLowerCase() || (Number.isFinite(gapRatio) && gapRatio <= 0.25 ? 'compact' : 'standard');
+      if (mode === 'bold') {
+        const stake = Number(event && event.boldTargetStake);
+        return Number.isFinite(stake) && stake > 0
+          ? `Goal mode bold, next stake ${money(stake)}`
+          : 'Goal mode bold';
+      }
       if (mode === 'compact') {
         const gapText = Number.isFinite(gapRatio) ? ` (${(gapRatio * 100).toFixed(1)}% seed gap)` : '';
         return `Goal mode compact${gapText}`;
@@ -2203,7 +2247,9 @@
       const config = run.config || {};
       const phase = String(snapshot.phase || run.phase || 'growth');
       const symbol = normalizeSymbol(snapshot.symbol ?? run.symbol ?? config.symbol ?? currentSymbol);
+      const targetSizingMode = normalizeTargetSizingMode(snapshot.targetSizingMode ?? run.targetSizingMode ?? config.targetSizingMode ?? currentTargetSizingMode);
       const digitStrategyMode = normalizeDigitStrategyMode(snapshot.digitStrategyMode ?? run.digitStrategyMode ?? config.digitStrategyMode ?? currentDigitStrategyMode);
+      const invertDigitSignal = Boolean(snapshot.invertDigitSignal ?? run.invertDigitSignal ?? config.invertDigitSignal ?? currentInvertDigitSignal);
       const autoModeEnabled = Boolean(snapshot.autoModeEnabled ?? run.autoModeEnabled ?? config.autoModeEnabled ?? currentAutoModeEnabled);
       const autoRiskProfile = normalizeAutoRiskProfile(snapshot.autoRiskProfile ?? run.autoRiskProfile ?? config.autoRiskProfile ?? currentAutoRiskProfile);
       const autoState = snapshot.autoState ?? run.autoState ?? null;
@@ -2295,7 +2341,9 @@
       currentInitialStake = initialStake;
       currentProfitAggression = profitAggression;
       currentSymbol = symbol;
+      currentTargetSizingMode = targetSizingMode;
       currentDigitStrategyMode = digitStrategyMode;
+      currentInvertDigitSignal = invertDigitSignal;
       currentAutoModeEnabled = autoModeEnabled;
       currentAutoRiskProfile = autoRiskProfile;
 
@@ -2308,7 +2356,9 @@
       el.autoMode.checked = autoModeEnabled;
       el.autoRiskProfile.value = autoRiskProfile;
       el.symbol.value = symbol;
+      el.targetSizingMode.value = targetSizingMode;
       el.digitStrategyMode.value = digitStrategyMode;
+      el.invertDigitSignal.checked = invertDigitSignal;
       el.growthStairMode.value = growthStairMode;
       el.initialStake.value = optionalInputValue(initialStake);
       el.profitAggression.value = profitAggression;
@@ -2321,7 +2371,9 @@
         accountBalance,
         phase: snapshot.phase || run.phase || 'growth',
         symbol,
+        targetSizingMode,
         digitStrategyMode,
+        invertDigitSignal,
         autoModeEnabled,
         autoRiskProfile,
         autoState,
@@ -2411,7 +2463,9 @@
       if (run.mode) el.mode.value = run.mode;
       if (run.accountId) el.accountId.value = run.accountId;
       const symbol = normalizeSymbol(snapshot.symbol ?? run.symbol ?? run.config?.symbol ?? currentSymbol);
+      const targetSizingMode = normalizeTargetSizingMode(snapshot.targetSizingMode ?? run.targetSizingMode ?? run.config?.targetSizingMode ?? currentTargetSizingMode);
       const digitStrategyMode = normalizeDigitStrategyMode(snapshot.digitStrategyMode ?? run.digitStrategyMode ?? run.config?.digitStrategyMode ?? currentDigitStrategyMode);
+      const invertDigitSignal = Boolean(snapshot.invertDigitSignal ?? run.invertDigitSignal ?? run.config?.invertDigitSignal ?? currentInvertDigitSignal);
       const autoModeEnabled = Boolean(snapshot.autoModeEnabled ?? run.autoModeEnabled ?? run.config?.autoModeEnabled ?? currentAutoModeEnabled);
       const autoRiskProfile = normalizeAutoRiskProfile(snapshot.autoRiskProfile ?? run.autoRiskProfile ?? run.config?.autoRiskProfile ?? currentAutoRiskProfile);
       const growthStairMode = normalizeGrowthStairMode(
@@ -2427,7 +2481,9 @@
       );
       currentProfitAggression = profitAggression;
       currentSymbol = symbol;
+      currentTargetSizingMode = targetSizingMode;
       currentDigitStrategyMode = digitStrategyMode;
+      currentInvertDigitSignal = invertDigitSignal;
       currentAutoModeEnabled = autoModeEnabled;
       currentAutoRiskProfile = autoRiskProfile;
       currentGrowthStairMode = growthStairMode;
@@ -2435,7 +2491,9 @@
       el.autoMode.checked = autoModeEnabled;
       el.autoRiskProfile.value = autoRiskProfile;
       el.symbol.value = symbol;
+      el.targetSizingMode.value = targetSizingMode;
       el.digitStrategyMode.value = digitStrategyMode;
+      el.invertDigitSignal.checked = invertDigitSignal;
       el.growthStairMode.value = growthStairMode;
       el.initialStake.value = optionalInputValue(initialStake);
       el.profitAggression.value = profitAggression;
@@ -2691,16 +2749,22 @@
       const growthBalance = Number.isFinite(Number(event.effectiveGrowthBalance))
         ? Number(event.effectiveGrowthBalance)
         : balance;
+      const targetSizingMode = normalizeTargetSizingMode(event.targetSizingMode ?? currentTargetSizingMode);
+      const invertDigitSignal = Boolean(event.invertDigitSignal ?? currentInvertDigitSignal);
       currentSeed = seed;
       currentTarget = target;
       currentAutoModeEnabled = autoModeEnabled;
       currentAutoRiskProfile = autoRiskProfile;
       currentSymbol = symbol;
+      currentTargetSizingMode = targetSizingMode;
       currentDigitStrategyMode = digitStrategyMode;
+      currentInvertDigitSignal = invertDigitSignal;
       el.autoMode.checked = autoModeEnabled;
       el.autoRiskProfile.value = autoRiskProfile;
       el.symbol.value = symbol;
+      el.targetSizingMode.value = targetSizingMode;
       el.digitStrategyMode.value = digitStrategyMode;
+      el.invertDigitSignal.checked = invertDigitSignal;
       const gateFloor = Number(event.riskFloor || seed);
       const recoveryDebt = Number(event.recoveryDebt || 0);
       const profitAggression = clampNumber(event.profitAggression ?? currentProfitAggression, 1, 5);
@@ -2759,8 +2823,8 @@
         }, source || 'balance');
       }
       el.strategyText.textContent = estimatedWinProfitRatio > 0
-        ? `${symbol} · ${digitStrategyLabel(digitStrategyMode)} · payout +${(estimatedWinProfitRatio * 100).toFixed(0)}%`
-        : `${symbol} · ${digitStrategyLabel(digitStrategyMode)}`;
+        ? `${symbol} - ${targetSizingLabel(targetSizingMode)} - ${digitStrategyLabel(digitStrategyMode)}${invertDigitSignal ? ' - inverted' : ''} - payout +${(estimatedWinProfitRatio * 100).toFixed(0)}%`
+        : `${symbol} - ${targetSizingLabel(targetSizingMode)} - ${digitStrategyLabel(digitStrategyMode)}${invertDigitSignal ? ' - inverted' : ''}`;
       el.paceText.textContent = paceText;
 
       currentProfitAggression = profitAggression;
@@ -2884,7 +2948,9 @@
       currentAutoModeEnabled = Boolean(el.autoMode.checked);
       currentAutoRiskProfile = normalizeAutoRiskProfile(el.autoRiskProfile.value);
       currentSymbol = normalizeSymbol(el.symbol.value);
+      currentTargetSizingMode = normalizeTargetSizingMode(el.targetSizingMode.value);
       currentDigitStrategyMode = normalizeDigitStrategyMode(el.digitStrategyMode.value);
+      currentInvertDigitSignal = Boolean(el.invertDigitSignal.checked);
       currentProfitAggression = clampNumber(el.profitAggression.value, 1, 5);
       currentGrowthStairMode = normalizeGrowthStairMode(el.growthStairMode.value);
       currentGrowthStairsEnabled = currentGrowthStairMode !== 'off';
@@ -2901,7 +2967,9 @@
         target: currentTarget,
         phase: 'growth',
         symbol: currentSymbol,
+        targetSizingMode: currentTargetSizingMode,
         digitStrategyMode: currentDigitStrategyMode,
+        invertDigitSignal: currentInvertDigitSignal,
         autoModeEnabled: currentAutoModeEnabled,
         autoRiskProfile: currentAutoRiskProfile,
         autoState: currentAutoModeEnabled ? 'scout' : 'manual',
@@ -2946,7 +3014,9 @@
         autoModeEnabled: currentAutoModeEnabled,
         autoRiskProfile: currentAutoRiskProfile,
         symbol: currentSymbol,
+        targetSizingMode: currentTargetSizingMode,
         digitStrategyMode: currentDigitStrategyMode,
+        invertDigitSignal: currentInvertDigitSignal,
         guideFilters: el.guideFilters.checked,
         strictBarFilters: el.strictBars.checked,
         growthStairMode: currentGrowthStairMode,
@@ -3036,7 +3106,15 @@
       syncConfigPreviewFromControls();
     });
 
+    el.targetSizingMode.addEventListener('change', () => {
+      syncConfigPreviewFromControls();
+    });
+
     el.digitStrategyMode.addEventListener('change', () => {
+      syncConfigPreviewFromControls();
+    });
+
+    el.invertDigitSignal.addEventListener('change', () => {
       syncConfigPreviewFromControls();
     });
 
@@ -3053,11 +3131,15 @@
       currentAutoModeEnabled = Boolean(config.autoModeEnabled ?? currentAutoModeEnabled);
       currentAutoRiskProfile = normalizeAutoRiskProfile(config.autoRiskProfile || currentAutoRiskProfile);
       currentSymbol = normalizeSymbol(config.defaultSymbol || currentSymbol);
+      currentTargetSizingMode = normalizeTargetSizingMode(config.targetSizingMode || currentTargetSizingMode);
       currentDigitStrategyMode = normalizeDigitStrategyMode(config.digitStrategyMode || currentDigitStrategyMode);
+      currentInvertDigitSignal = Boolean(config.invertDigitSignal ?? currentInvertDigitSignal);
       el.autoMode.checked = currentAutoModeEnabled;
       el.autoRiskProfile.value = currentAutoRiskProfile;
       el.symbol.value = currentSymbol;
+      el.targetSizingMode.value = currentTargetSizingMode;
       el.digitStrategyMode.value = currentDigitStrategyMode;
+      el.invertDigitSignal.checked = currentInvertDigitSignal;
       if (Number.isFinite(Number(config.windowSize))) {
         currentWindowSize = Number(config.windowSize);
       }
