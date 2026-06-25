@@ -1069,6 +1069,15 @@ class DerivDigitBot extends EventEmitter {
     return streak;
   }
 
+  autoRelaxedHighRiskEntries() {
+    if (!this.options.autoModeEnabled) return false;
+    const profile = normalizeAutoRiskProfile(this.options.autoRiskProfile);
+    const mode = normalizeDigitStrategyMode(this.options.digitStrategyMode);
+    return [AUTO_RISK_PROFILES.AGGRESSIVE, AUTO_RISK_PROFILES.INSANE_DEMO].includes(profile) &&
+      [AUTO_STATES.PRESSURE, AUTO_STATES.BLAST].includes(this.autoState) &&
+      [DIGIT_STRATEGY_MODES.EXTREME, DIGIT_STRATEGY_MODES.MATCH_SNIPER].includes(mode);
+  }
+
   applyAutoCommander(force = false) {
     if (!this.options.autoModeEnabled) {
       this.autoState = AUTO_STATES.MANUAL;
@@ -2014,8 +2023,10 @@ class DerivDigitBot extends EventEmitter {
       this.tradeCooldownDetail = '';
     }
 
+    const relaxedAutoEntry = this.autoRelaxedHighRiskEntries();
     const condition = this.selectCondition(tick.digit, {
-      ignoreGuideFilters: plan.kind === PHASES.BLIND_SNIPER || plan.kind === 'all_in'
+      ignoreGuideFilters: plan.kind === PHASES.BLIND_SNIPER || plan.kind === 'all_in',
+      relaxedAutoEntry
     });
     if (!condition) {
       this.emitAnalysis(
@@ -2048,13 +2059,13 @@ class DerivDigitBot extends EventEmitter {
     });
   }
 
-  selectCondition(currentDigit, { ignoreGuideFilters = false } = {}) {
+  selectCondition(currentDigit, { ignoreGuideFilters = false, relaxedAutoEntry = false } = {}) {
     const mode = normalizeDigitStrategyMode(this.options.digitStrategyMode);
     let condition = null;
     if (mode === DIGIT_STRATEGY_MODES.EXTREME) {
-      condition = this.selectExtremeCondition(currentDigit, { ignoreGuideFilters });
+      condition = this.selectExtremeCondition(currentDigit, { ignoreGuideFilters, relaxedAutoEntry });
     } else if (mode === DIGIT_STRATEGY_MODES.MATCH_SNIPER) {
-      condition = this.selectMatchSniperCondition(currentDigit, { ignoreGuideFilters });
+      condition = this.selectMatchSniperCondition(currentDigit, { ignoreGuideFilters, relaxedAutoEntry });
     } else {
       condition = this.selectBaseCondition(currentDigit, { ignoreGuideFilters });
     }
@@ -2082,14 +2093,14 @@ class DerivDigitBot extends EventEmitter {
     return this.guideAllows(condition, currentDigit, stats) ? condition : null;
   }
 
-  selectExtremeCondition(currentDigit, { ignoreGuideFilters = false } = {}) {
+  selectExtremeCondition(currentDigit, { ignoreGuideFilters = false, relaxedAutoEntry = false } = {}) {
     const stats = this.stats();
     const over = digitOverCondition(7, 'Over 7');
     const under = digitUnderCondition(2, 'Under 2');
     const overMetrics = this.extremeConditionMetrics(over, currentDigit, stats);
     const underMetrics = this.extremeConditionMetrics(under, currentDigit, stats);
 
-    if (ignoreGuideFilters) {
+    if (ignoreGuideFilters || relaxedAutoEntry) {
       if (overMetrics.score > underMetrics.score) return over;
       if (underMetrics.score > overMetrics.score) return under;
       return overMetrics.windowHitRate >= underMetrics.windowHitRate ? over : under;
@@ -2105,12 +2116,12 @@ class DerivDigitBot extends EventEmitter {
     return candidates[0] ? candidates[0].condition : null;
   }
 
-  selectMatchSniperCondition(currentDigit, { ignoreGuideFilters = false } = {}) {
+  selectMatchSniperCondition(currentDigit, { ignoreGuideFilters = false, relaxedAutoEntry = false } = {}) {
     const stats = this.stats();
-    if (!ignoreGuideFilters && this.totalTrades < this.matchSniperCooldownUntilTrade) return null;
+    if (!ignoreGuideFilters && !relaxedAutoEntry && this.totalTrades < this.matchSniperCooldownUntilTrade) return null;
 
     const minCount = Math.min(...stats.counts);
-    if (!ignoreGuideFilters && minCount > this.options.matchSniperMaxCount) return null;
+    if (!ignoreGuideFilters && !relaxedAutoEntry && minCount > this.options.matchSniperMaxCount) return null;
 
     const coldDigits = stats.counts
       .map((count, digit) => ({ count, digit }))
