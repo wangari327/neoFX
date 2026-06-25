@@ -304,7 +304,7 @@ function sanitizeStartPayload(payload = {}) {
     riskyStakePercent: numberFrom(process.env.RISKY_STAKE_PERCENT, 0.35),
     martingaleCapPercent: numberFrom(process.env.MARTINGALE_CAP_PERCENT, 0.4),
     allInLossStreakThreshold: numberFrom(payload.allInLossStreakThreshold, numberFrom(process.env.ALL_IN_LOSS_STREAK_THRESHOLD, 3)),
-    allInStakePercent: numberFrom(payload.allInStakePercent, numberFrom(process.env.ALL_IN_STAKE_PERCENT, 0.99)),
+    allInStakePercent: numberFrom(payload.allInStakePercent, numberFrom(process.env.ALL_IN_STAKE_PERCENT, 0.25)),
     growthMilestonePercent: numberFrom(process.env.GROWTH_MILESTONE_PERCENT, 0.025),
     growthStakeBumpPercent: numberFrom(process.env.GROWTH_STAKE_BUMP_PERCENT, 0.15),
     growthStakeCapPercent: numberFrom(process.env.GROWTH_STAKE_CAP_PERCENT, 0.12),

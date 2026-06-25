@@ -135,11 +135,12 @@ Blind sniper overlay:
 - Starts from one-third of session balance, then applies gap/profit caps so compact targets do not risk a huge shot for a small remaining profit.
 - Stops arming after all configured marks have been used. Add more marks if you want more than 3 possible shots.
 
-Emergency all-in:
+Emergency recovery shot:
 
 - If the last completed trades stack into the configured loss streak, the bot can fire one emergency recovery shot before returning to the normal recovery ledger.
-- Defaults are `ALL_IN_LOSS_STREAK_THRESHOLD=3` and `ALL_IN_STAKE_PERCENT=0.99`.
-- It is intended as an optional last-resort recovery mechanic; keep it on demo until the behavior is proven.
+- It is disabled in high-risk digit modes such as Over 7 / Under 2 and Digit Match Sniper. Those modes already have lottery-like variance, so recovery falls back to staged debt logic instead.
+- The shot is debt-sized and capped by session balance, target gap, and `ALL_IN_STAKE_PERCENT`; it no longer defaults to staking nearly the whole session.
+- Defaults are `ALL_IN_LOSS_STREAK_THRESHOLD=3` and `ALL_IN_STAKE_PERCENT=0.25`.
 
 Exit:
 
@@ -207,7 +208,7 @@ MATCH_SNIPER_COOLDOWN_TRADES=3
 MATCH_SNIPER_MAX_COUNT=1
 RECOVERY_BUFFER_PERCENT=0.05
 ALL_IN_LOSS_STREAK_THRESHOLD=3
-ALL_IN_STAKE_PERCENT=0.99
+ALL_IN_STAKE_PERCENT=0.25
 BLIND_SNIPER_ENABLED=false
 BLIND_SNIPER_CADENCE_TRADES=3
 BLIND_SNIPER_MAX_USES=3

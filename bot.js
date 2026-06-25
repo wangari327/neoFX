@@ -297,7 +297,7 @@ class DerivDigitBot extends EventEmitter {
       martingaleCapPercent: toNumber(options.martingaleCapPercent, 0.4),
       martingaleRetryLimit: Math.max(2, Math.floor(toNumber(options.martingaleRetryLimit, 2))),
       allInLossStreakThreshold: Math.max(2, Math.floor(toNumber(options.allInLossStreakThreshold, 3))),
-      allInStakePercent: clamp(toNumber(options.allInStakePercent, 0.99), 0.5, 1),
+      allInStakePercent: clamp(toNumber(options.allInStakePercent, 0.25), 0.05, 1),
       splitRecoveryCooldownTrades: Math.max(1, Math.floor(toNumber(options.splitRecoveryCooldownTrades, 3))),
       splitRecoveryPieces: Math.max(2, Math.floor(toNumber(options.splitRecoveryPieces, 2))),
       splitRecoveryCapPercent: clamp(toNumber(options.splitRecoveryCapPercent, 0.22), 0.05, 1),
@@ -854,10 +854,16 @@ class DerivDigitBot extends EventEmitter {
     const confidenceGate = this.confidenceGateState();
     const floor = this.growthStakeFloor(confidenceGate);
     const boost = confidenceGate.locked ? 1 : calibration.growthBoost;
-    const rawStake = Math.max(this.effectiveGrowthBalance() * this.options.baseStakePercent * boost, floor);
+    const rawStake = this.hasCustomInitialStake()
+      ? Math.max(floor * calibration.customStakeMaxBoost, floor)
+      : Math.max(this.effectiveGrowthBalance() * this.options.baseStakePercent * boost, floor);
     const floorCapPercent = Math.min(1, floor / Math.max(this.balance, this.options.minStake));
     const capPercent = Math.max(this.options.growthStakeCapPercent, calibration.growthStakeCapPercent, floorCapPercent);
     return this.normalizeStake(rawStake, capPercent);
+  }
+
+  hasCustomInitialStake() {
+    return Number.isFinite(this.options.initialStake) && this.options.initialStake !== null;
   }
 
   riskyStakePercent(progress = this.progressRatio()) {
@@ -1290,18 +1296,32 @@ class DerivDigitBot extends EventEmitter {
   }
 
   emergencyAllInState() {
+    const calibration = this.goalCalibration();
     const threshold = Math.max(2, Math.floor(toNumber(this.options.allInLossStreakThreshold, 3)));
-    const stakePercent = clamp(toNumber(this.options.allInStakePercent, 0.99), 0.5, 1);
+    const stakePercent = clamp(toNumber(this.options.allInStakePercent, 0.25), 0.05, 1);
+    const strategyMode = normalizeDigitStrategyMode(this.options.digitStrategyMode);
+    const highRiskBlocked = strategyMode !== DIGIT_STRATEGY_MODES.BASE;
+    const debt = this.currentRecoveryDebt();
+    const stake = highRiskBlocked ? 0 : this.emergencyRecoveryStake(calibration);
+    const capPercent = Math.min(stakePercent, calibration.emergencyRecoveryCapPercent);
     const armed =
       !this.stopped &&
       this.balance >= this.options.minStake &&
       !this.emergencyAllInUsed &&
+      !highRiskBlocked &&
+      debt > 0 &&
+      stake >= this.options.minStake &&
       this.martingaleLossStreak >= threshold;
 
     return {
       armed,
       threshold,
-      stakePercent
+      stakePercent,
+      stake,
+      capPercent,
+      highRiskBlocked,
+      strategyMode,
+      recoveryDebt: debt
     };
   }
 
@@ -1382,6 +1402,7 @@ class DerivDigitBot extends EventEmitter {
       gapRatio,
       profitAggression: this.options.profitAggression,
       profitAggressionRatio: aggression,
+      customStakeMaxBoost: compact ? 1 + aggression * 0.2 : 1 + aggression * 0.08,
       growthBoost: compact ? 1.25 + aggression * 0.45 : 1 + aggression * 0.12,
       growthStakeCapPercent: compact
         ? Math.max(this.options.growthStakeCapPercent, 0.12 + aggression * 0.06)
@@ -1404,7 +1425,11 @@ class DerivDigitBot extends EventEmitter {
       profitPushStartRatio: compact ? Math.max(0.18, 0.4 - aggression * 0.18) : 0.7,
       profitPushGapFraction: compact ? 0.35 + aggression * 0.25 : 0.25 + aggression * 0.15,
       profitPushStakeMultiplier: 1.15 + aggression * 0.9,
+      customProfitPushStakeMultiplier: compact ? 1.25 + aggression * 0.45 : 1.15 + aggression * 0.3,
       profitPushCapPercent: compact ? 0.08 + aggression * 0.08 : 0.06 + aggression * 0.04,
+      emergencyRecoveryCapPercent: compact ? 0.08 + aggression * 0.04 : 0.12 + aggression * 0.05,
+      emergencyRecoveryGapFraction: compact ? 0.35 + aggression * 0.15 : 0.5,
+      emergencyRecoveryStakeMultiplier: compact ? 1.05 + aggression * 0.35 : 1.1 + aggression * 0.45,
       riskCooldownScale: 1 - aggression * 0.35,
       estimatedWinProfitRatio: this.estimatedWinProfitRatio()
     };
@@ -1614,10 +1639,33 @@ class DerivDigitBot extends EventEmitter {
     const targetProfit = Math.max(this.options.minStake * 0.2, remainingGap * calibration.profitPushGapFraction);
     const projectedStake = targetProfit / calibration.estimatedWinProfitRatio;
     const growthStake = this.growthStake();
-    const rawStake = Math.max(growthStake * calibration.profitPushStakeMultiplier, projectedStake);
+    const stakeMultiplier = this.hasCustomInitialStake()
+      ? Math.min(calibration.profitPushStakeMultiplier, calibration.customProfitPushStakeMultiplier)
+      : calibration.profitPushStakeMultiplier;
+    const rawStake = Math.max(growthStake * stakeMultiplier, projectedStake);
     const floorCapPercent = Math.min(1, growthStake / balance);
     const capPercent = Math.max(calibration.profitPushCapPercent, floorCapPercent);
     return this.normalizeStake(rawStake, capPercent);
+  }
+
+  emergencyRecoveryStake(calibration = this.goalCalibration()) {
+    const debt = this.currentRecoveryDebt();
+    if (debt <= 0) return 0;
+
+    const winRatio = Math.max(0.12, calibration.estimatedWinProfitRatio);
+    const targetProfit = Math.max(this.options.minStake * 0.2, debt * (1 + this.options.recoveryBufferPercent));
+    const projectedStake = (targetProfit / winRatio) * calibration.emergencyRecoveryStakeMultiplier;
+    const capPercent = Math.min(this.options.allInStakePercent, calibration.emergencyRecoveryCapPercent);
+    const balanceCap = Math.max(this.options.minStake, this.balance * capPercent);
+    const remainingGap = Math.max(0, this.options.target - this.effectiveGrowthBalance());
+    const gapCap = Math.max(this.options.minStake, remainingGap * calibration.emergencyRecoveryGapFraction);
+    const stopReserve = Math.max(0, this.balance - this.options.seed * 0.5);
+    const reserveCap = Math.max(this.options.minStake, stopReserve * 0.65);
+    const rawStake = Math.min(projectedStake, balanceCap, gapCap, reserveCap);
+
+    return rawStake >= this.options.minStake
+      ? this.normalizeStake(rawStake, capPercent)
+      : 0;
   }
 
   recoveryStake() {
@@ -2087,9 +2135,21 @@ class DerivDigitBot extends EventEmitter {
     if (emergencyAllIn.armed) {
       return {
         kind: 'all_in',
-        stake: this.normalizeStake(this.balance * emergencyAllIn.stakePercent, 1),
+        stake: emergencyAllIn.stake,
         emergencyAllIn
       };
+    }
+
+    if (
+      emergencyAllIn.highRiskBlocked &&
+      emergencyAllIn.recoveryDebt > 0 &&
+      this.martingaleLossStreak >= emergencyAllIn.threshold
+    ) {
+      this.emitAnalysis(
+        'all_in_blocked',
+        'Emergency recovery shot is disabled in high-risk digit modes. The bot will use staged recovery instead.',
+        { plan: { kind: 'all_in_blocked' }, emergencyAllIn }
+      );
     }
 
     const throttle = this.confidenceThrottleState(confidenceGate);
@@ -2612,7 +2672,7 @@ class DerivDigitBot extends EventEmitter {
 
         this.emitAnalysis(
           'waiting_condition',
-          `All-in shot won. Recovery debt is still open, so the bot will only stay in martingale until it clears.`,
+          `Emergency recovery shot won. Recovery debt is still open, so the bot will only stay in martingale until it clears.`,
           { plan, condition: result.condition }
         );
       }
@@ -2688,7 +2748,7 @@ class DerivDigitBot extends EventEmitter {
       this.emergencyAllInUsed = true;
       this.emitAnalysis(
         'waiting_condition',
-        `All-in shot missed. Recovery stays open and the bot will fall back to martingale only if debt is still present.`,
+        `Emergency recovery shot missed. Recovery stays open and the bot will fall back to martingale only if debt is still present.`,
         { plan, condition: result.condition }
       );
       if (this.balance >= this.options.minStake) {
