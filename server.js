@@ -221,6 +221,8 @@ function sanitizeStartPayload(payload = {}) {
     baseStakePercent: numberFrom(process.env.BASE_STAKE_PERCENT, 0.02),
     riskyStakePercent: numberFrom(process.env.RISKY_STAKE_PERCENT, 0.35),
     martingaleCapPercent: numberFrom(process.env.MARTINGALE_CAP_PERCENT, 0.4),
+    allInLossStreakThreshold: numberFrom(payload.allInLossStreakThreshold, numberFrom(process.env.ALL_IN_LOSS_STREAK_THRESHOLD, 3)),
+    allInStakePercent: numberFrom(payload.allInStakePercent, numberFrom(process.env.ALL_IN_STAKE_PERCENT, 0.99)),
     growthMilestonePercent: numberFrom(process.env.GROWTH_MILESTONE_PERCENT, 0.025),
     growthStakeBumpPercent: numberFrom(process.env.GROWTH_STAKE_BUMP_PERCENT, 0.15),
     growthStakeCapPercent: numberFrom(process.env.GROWTH_STAKE_CAP_PERCENT, 0.12),
@@ -272,6 +274,7 @@ function summarizeRun(run, reason = run?.reason || 'manual') {
     initialStakeUsed: Boolean(snapshot.initialStakeUsed ?? run.initialStakeUsed ?? run.config?.initialStakeUsed ?? false),
     martingaleLossStreak: Number(snapshot.martingaleLossStreak ?? run.martingaleLossStreak ?? 0),
     martingaleRetryLimit: Number(snapshot.martingaleRetryLimit ?? run.martingaleRetryLimit ?? 2),
+    emergencyAllInUsed: Boolean(snapshot.emergencyAllInUsed ?? run.emergencyAllInUsed ?? false),
     splitRecoveryArmed: Boolean(snapshot.splitRecoveryArmed ?? run.splitRecoveryArmed ?? run.config?.splitRecoveryArmed ?? false),
     splitRecoveryReadyAtTrade: Number(snapshot.splitRecoveryReadyAtTrade ?? run.splitRecoveryReadyAtTrade ?? 0),
     splitRecoveryPiecesRemaining: Number(snapshot.splitRecoveryPiecesRemaining ?? run.splitRecoveryPiecesRemaining ?? 0),
@@ -344,6 +347,7 @@ function buildRunPatch(bot, runDoc, extra = {}) {
     tradeCooldownUntil: snapshot?.tradeCooldownUntil ?? runDoc?.tradeCooldownUntil ?? 0,
     tradeCooldownReason: snapshot?.tradeCooldownReason ?? runDoc?.tradeCooldownReason ?? null,
     tradeCooldownDetail: snapshot?.tradeCooldownDetail ?? runDoc?.tradeCooldownDetail ?? null,
+    emergencyAllInUsed: Boolean(snapshot?.emergencyAllInUsed ?? runDoc?.emergencyAllInUsed ?? false),
     updatedAt: new Date(),
     ...extra
   };
@@ -468,6 +472,7 @@ function runBalanceState(run) {
     initialStakeUsed: Boolean(snapshot.initialStakeUsed ?? run.initialStakeUsed ?? run.config?.initialStakeUsed ?? false),
     martingaleLossStreak: Number(snapshot.martingaleLossStreak ?? run.martingaleLossStreak ?? 0),
     martingaleRetryLimit: Number(snapshot.martingaleRetryLimit ?? run.martingaleRetryLimit ?? 2),
+    emergencyAllInUsed: Boolean(snapshot.emergencyAllInUsed ?? run.emergencyAllInUsed ?? false),
     splitRecoveryArmed: Boolean(snapshot.splitRecoveryArmed ?? run.splitRecoveryArmed ?? false),
     splitRecoveryReadyAtTrade: Number(snapshot.splitRecoveryReadyAtTrade ?? run.splitRecoveryReadyAtTrade ?? 0),
     splitRecoveryPiecesRemaining: Number(snapshot.splitRecoveryPiecesRemaining ?? run.splitRecoveryPiecesRemaining ?? 0),
@@ -772,6 +777,7 @@ async function startFreshRun(payload = {}) {
     tradeCooldownUntil: initialSnapshot.tradeCooldownUntil,
     tradeCooldownReason: initialSnapshot.tradeCooldownReason,
     tradeCooldownDetail: initialSnapshot.tradeCooldownDetail,
+    emergencyAllInUsed: initialSnapshot.emergencyAllInUsed,
     startedAt: bot.startedAt ? bot.startedAt.toISOString() : new Date().toISOString()
   });
 

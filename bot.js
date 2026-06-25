@@ -179,6 +179,8 @@ class DerivDigitBot extends EventEmitter {
       riskyStakePercent: toNumber(options.riskyStakePercent, 0.35),
       martingaleCapPercent: toNumber(options.martingaleCapPercent, 0.4),
       martingaleRetryLimit: Math.max(2, Math.floor(toNumber(options.martingaleRetryLimit, 2))),
+      allInLossStreakThreshold: Math.max(2, Math.floor(toNumber(options.allInLossStreakThreshold, 3))),
+      allInStakePercent: clamp(toNumber(options.allInStakePercent, 0.99), 0.5, 1),
       splitRecoveryCooldownTrades: Math.max(1, Math.floor(toNumber(options.splitRecoveryCooldownTrades, 3))),
       splitRecoveryPieces: Math.max(2, Math.floor(toNumber(options.splitRecoveryPieces, 2))),
       splitRecoveryCapPercent: clamp(toNumber(options.splitRecoveryCapPercent, 0.22), 0.05, 1),
@@ -230,6 +232,7 @@ class DerivDigitBot extends EventEmitter {
     this.blindSniperUses = 0;
     this.tradesSinceBlindSniper = 0;
     this.sniperOverlayNet = 0;
+    this.emergencyAllInUsed = false;
 
     this.totalTrades = 0;
     this.wins = 0;
@@ -263,6 +266,7 @@ class DerivDigitBot extends EventEmitter {
     this.tradeCooldownUntil = 0;
     this.tradeCooldownReason = '';
     this.tradeCooldownDetail = '';
+    this.emergencyAllInUsed = false;
     this.emitStatus('starting');
 
     if (!this.options.token) {
@@ -308,6 +312,7 @@ class DerivDigitBot extends EventEmitter {
     this.tradeCooldownUntil = 0;
     this.tradeCooldownReason = '';
     this.tradeCooldownDetail = '';
+    this.emergencyAllInUsed = false;
     this.currentPlan = null;
     this.tradeInFlight = false;
 
@@ -639,12 +644,9 @@ class DerivDigitBot extends EventEmitter {
   }
 
   confidenceThrottleState(confidenceGate = this.confidenceGateState()) {
-    const activePhase = ![PHASES.MARTINGALE, PHASES.REBUILD, PHASES.STOPPED].includes(this.phase);
     const eligible =
       confidenceGate.locked &&
       confidenceGate.progress > 0 &&
-      activePhase &&
-      !this.splitRecoveryArmed &&
       this.totalTrades >= CONFIDENCE_THROTTLE_MIN_TRADES;
 
     if (!eligible) {
@@ -671,7 +673,7 @@ class DerivDigitBot extends EventEmitter {
       active: cooldownMs > 0,
       cooldownMs,
       reason: 'confidence_throttle',
-      detail: `Win rate ${confidenceGate.winRate.toFixed(1)}% is below the confidence line. Slowing new entries for about ${Math.max(1, Math.ceil(cooldownMs / 1000))} second(s).`,
+      detail: `Win rate ${confidenceGate.winRate.toFixed(1)}% is below the confidence line. Keeping small growth trades moving while delaying risky jumps, martingale recovery, and sniper shots for about ${Math.max(1, Math.ceil(cooldownMs / 1000))} second(s).`,
       remainingMs: Math.max(0, cooldownMs)
     };
   }
@@ -684,6 +686,32 @@ class DerivDigitBot extends EventEmitter {
       this.tradeCooldownReason = String(reason || '');
       this.tradeCooldownDetail = String(detail || '');
     }
+  }
+
+  planShouldWaitForThrottle(plan) {
+    if (!plan || Date.now() >= this.tradeCooldownUntil) return false;
+    return [
+      PHASES.RISKY,
+      PHASES.MARTINGALE,
+      PHASES.BLIND_SNIPER,
+      'split_recovery'
+    ].includes(plan.kind);
+  }
+
+  emergencyAllInState() {
+    const threshold = Math.max(2, Math.floor(toNumber(this.options.allInLossStreakThreshold, 3)));
+    const stakePercent = clamp(toNumber(this.options.allInStakePercent, 0.99), 0.5, 1);
+    const armed =
+      !this.stopped &&
+      this.balance >= this.options.minStake &&
+      !this.emergencyAllInUsed &&
+      this.martingaleLossStreak >= threshold;
+
+    return {
+      armed,
+      threshold,
+      stakePercent
+    };
   }
 
   sessionProgressRatio() {
@@ -1055,28 +1083,6 @@ class DerivDigitBot extends EventEmitter {
       return;
     }
 
-    if (Date.now() < this.tradeCooldownUntil) {
-      const remainingMs = Math.max(0, this.tradeCooldownUntil - Date.now());
-      const remainingSeconds = Math.max(1, Math.ceil(remainingMs / 1000));
-      const cooldownReason = this.tradeCooldownReason === 'confidence_throttle'
-        ? this.tradeCooldownDetail || `Confidence throttle active. Waiting ${remainingSeconds} second(s) before the next entry.`
-        : this.tradeCooldownReason === 'trade_failed'
-          ? `A recent trade attempt failed. Waiting ${remainingSeconds} second(s) before trying again.`
-          : `Cooling down for ${remainingSeconds} second(s) before the next trade.`;
-      this.emitAnalysis(
-        'trade_cooldown',
-        cooldownReason,
-        { currentDigit: tick.digit }
-      );
-      return;
-    }
-
-    if (this.tradeCooldownUntil > 0 && Date.now() >= this.tradeCooldownUntil) {
-      this.tradeCooldownUntil = 0;
-      this.tradeCooldownReason = '';
-      this.tradeCooldownDetail = '';
-    }
-
     if (this.digits.length < this.options.windowSize) {
       this.emitAnalysis(
         'warming_up',
@@ -1096,8 +1102,30 @@ class DerivDigitBot extends EventEmitter {
       return;
     }
 
+    if (Date.now() < this.tradeCooldownUntil && this.planShouldWaitForThrottle(plan)) {
+      const remainingMs = Math.max(0, this.tradeCooldownUntil - Date.now());
+      const remainingSeconds = Math.max(1, Math.ceil(remainingMs / 1000));
+      const cooldownReason = this.tradeCooldownReason === 'confidence_throttle'
+        ? this.tradeCooldownDetail || `Confidence throttle active. Waiting ${remainingSeconds} second(s) before the next risky move.`
+        : this.tradeCooldownReason === 'trade_failed'
+          ? `A recent trade attempt failed. Waiting ${remainingSeconds} second(s) before trying again.`
+          : `Cooling down for ${remainingSeconds} second(s) before the next risky move.`;
+      this.emitAnalysis(
+        'trade_cooldown',
+        cooldownReason,
+        { currentDigit: tick.digit, plan }
+      );
+      return;
+    }
+
+    if (this.tradeCooldownUntil > 0 && Date.now() >= this.tradeCooldownUntil) {
+      this.tradeCooldownUntil = 0;
+      this.tradeCooldownReason = '';
+      this.tradeCooldownDetail = '';
+    }
+
     const condition = this.selectCondition(tick.digit, {
-      ignoreGuideFilters: plan.kind === PHASES.BLIND_SNIPER
+      ignoreGuideFilters: plan.kind === PHASES.BLIND_SNIPER || plan.kind === 'all_in'
     });
     if (!condition) {
       this.emitAnalysis(
@@ -1144,7 +1172,9 @@ class DerivDigitBot extends EventEmitter {
       condition = stats.counts[1] <= stats.counts[8] ? CONDITIONS.OVER_1 : CONDITIONS.UNDER_8;
     }
 
-    if (ignoreGuideFilters || !this.options.guideFilters) return condition;
+    if (!ignoreGuideFilters && currentDigit !== condition.entryDigit) return null;
+    if (ignoreGuideFilters) return condition;
+    if (!this.options.guideFilters) return condition;
     return this.guideAllows(condition, currentDigit, stats) ? condition : null;
   }
 
@@ -1177,8 +1207,36 @@ class DerivDigitBot extends EventEmitter {
       return null;
     }
 
-    const splitRecoveryState = this.splitRecoveryState();
     const calibration = this.goalCalibration();
+    const confidenceGate = this.confidenceGateState();
+    const emergencyAllIn = this.emergencyAllInState();
+    if (emergencyAllIn.armed) {
+      return {
+        kind: 'all_in',
+        stake: this.normalizeStake(this.balance * emergencyAllIn.stakePercent, 1),
+        emergencyAllIn
+      };
+    }
+
+    const throttle = this.confidenceThrottleState(confidenceGate);
+
+    if (confidenceGate.locked && confidenceGate.progress > 0) {
+      this.emitAnalysis(
+        'confidence_gate',
+        `Win rate ${confidenceGate.winRate.toFixed(1)}% is below ${confidenceGate.triggerWinRate}% while profit progress is positive. The bot is staying on small growth trades for now; martingale recovery, risky jumps, and sniper shots stay paused until it reaches ${confidenceGate.releaseWinRate}%+.`,
+        { plan: { kind: 'confidence_gate' } }
+      );
+    }
+
+    if (throttle.active && ![PHASES.REBUILD, PHASES.STOPPED].includes(this.phase)) {
+      return {
+        kind: PHASES.GROWTH,
+        stake: this.growthStake(),
+        confidenceThrottle: true
+      };
+    }
+
+    const splitRecoveryState = this.splitRecoveryState();
     if (splitRecoveryState.armed && splitRecoveryState.ready) {
       return {
         kind: 'split_recovery',
@@ -1187,19 +1245,7 @@ class DerivDigitBot extends EventEmitter {
       };
     }
 
-    const confidenceGate = this.confidenceGateState();
     const sniperState = this.blindSniperState(confidenceGate);
-
-    if (confidenceGate.locked && confidenceGate.progress > 0) {
-      if (this.phase === PHASES.RISKY) {
-        this.changePhase(PHASES.GROWTH, 'confidence_gate_active');
-      }
-      this.emitAnalysis(
-        'confidence_gate',
-        `Win rate ${confidenceGate.winRate.toFixed(1)}% is below ${confidenceGate.triggerWinRate}% while profit progress is positive. Risky jumps and sniper shots stay paused until it reaches ${confidenceGate.releaseWinRate}%+.`,
-        { plan: { kind: 'confidence_gate' } }
-      );
-    }
 
     if (sniperState.armed) {
       return {
@@ -1503,7 +1549,11 @@ class DerivDigitBot extends EventEmitter {
 
     const confidenceGateAfter = this.confidenceGateState();
     const throttle = this.confidenceThrottleState(confidenceGateAfter);
-    if (throttle.active && !this.stopped && this.phase === PHASES.GROWTH) {
+    if (
+      throttle.active &&
+      !this.stopped &&
+      (plan.kind === PHASES.GROWTH || plan.kind === 'initial_stake')
+    ) {
       this.setTradeCooldown(throttle.cooldownMs, throttle.reason, throttle.detail);
       this.emitAnalysis(
         'trade_cooldown',
@@ -1529,6 +1579,7 @@ class DerivDigitBot extends EventEmitter {
 
     if (result.won) {
       this.martingaleLossStreak = 0;
+      this.emergencyAllInUsed = false;
       const remainingDebt = this.currentRecoveryDebt();
       if (plan.kind === PHASES.RISKY) {
         if (remainingDebt <= 0) {
@@ -1577,7 +1628,33 @@ class DerivDigitBot extends EventEmitter {
         return;
       }
 
+      if (plan.kind === 'all_in') {
+        if (remainingDebt <= 0) {
+          const lockedFloor = this.lockedProfitFloor();
+          this.riskFloor = lockedFloor;
+          this.growthAnchorBalance = lockedFloor;
+          this.clearSplitRecovery(null);
+          this.changePhase(PHASES.GROWTH, 'all_in_recovered_to_growth');
+          return;
+        }
+
+        this.emitAnalysis(
+          'waiting_condition',
+          `All-in shot won. Recovery debt is still open, so the bot will only stay in martingale until it clears.`,
+          { plan, condition: result.condition }
+        );
+      }
+
       if (remainingDebt > 0 && this.phase !== PHASES.MARTINGALE && this.phase !== PHASES.REBUILD) {
+        const throttle = this.confidenceThrottleState();
+        if (throttle.active && plan.kind !== 'all_in') {
+          this.emitAnalysis(
+            'waiting_condition',
+            `Recovery debt remains, but the confidence delay is keeping the bot on small trades for now.`,
+            { plan, condition: result.condition }
+          );
+          return;
+        }
         this.changePhase(PHASES.MARTINGALE, 'open_recovery_debt_after_win');
       }
       return;
@@ -1620,6 +1697,21 @@ class DerivDigitBot extends EventEmitter {
         );
       } else {
         this.clearSplitRecovery('split_recovery_exhausted');
+      }
+      return;
+    }
+
+    if (plan.kind === 'all_in') {
+      this.emergencyAllInUsed = true;
+      this.emitAnalysis(
+        'waiting_condition',
+        `All-in shot missed. Recovery stays open and the bot will fall back to martingale only if debt is still present.`,
+        { plan, condition: result.condition }
+      );
+      if (this.balance >= this.options.minStake) {
+        this.changePhase(PHASES.MARTINGALE, 'all_in_failed_recovery_debt_open');
+      } else {
+        this.changePhase(PHASES.REBUILD, 'all_in_failed_rebuild');
       }
       return;
     }
@@ -1853,6 +1945,7 @@ class DerivDigitBot extends EventEmitter {
       initialStakeUsed: this.initialStakeUsed,
       martingaleLossStreak: this.martingaleLossStreak,
       martingaleRetryLimit: calibration.martingaleRetryLimit,
+      emergencyAllInUsed: this.emergencyAllInUsed,
       splitRecoveryArmed: this.splitRecoveryArmed,
       splitRecoveryReadyAtTrade: this.splitRecoveryReadyAtTrade,
       splitRecoveryPiecesRemaining: this.splitRecoveryPiecesRemaining,
@@ -1922,6 +2015,7 @@ class DerivDigitBot extends EventEmitter {
     this.options.initialStake = toOptionalNumber(snapshot.initialStake, this.options.initialStake);
     this.initialStakeUsed = Boolean(snapshot.initialStakeUsed ?? this.initialStakeUsed);
     this.martingaleLossStreak = Math.max(0, Math.floor(toNumber(snapshot.martingaleLossStreak, this.martingaleLossStreak)));
+    this.emergencyAllInUsed = Boolean(snapshot.emergencyAllInUsed ?? this.emergencyAllInUsed);
     this.splitRecoveryArmed = Boolean(snapshot.splitRecoveryArmed ?? this.splitRecoveryArmed);
     this.splitRecoveryReadyAtTrade = Math.max(0, Math.floor(toNumber(snapshot.splitRecoveryReadyAtTrade, this.splitRecoveryReadyAtTrade)));
     this.splitRecoveryPiecesRemaining = Math.max(0, Math.floor(toNumber(snapshot.splitRecoveryPiecesRemaining, this.splitRecoveryPiecesRemaining)));

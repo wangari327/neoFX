@@ -921,7 +921,7 @@
             <div class="field-help">The base equity-to-target loop always runs. Guide filters, growth stairs, and sniper shots are optional overlays.</div>
 
             <div class="switch-row">
-              <label for="guideFilters" title="Optional extra checks from the strategy notes. Leave this off if you want the core loop to trade continuously.">Guide filters</label>
+              <label for="guideFilters" title="Optional extra checks after the entry-digit gate. Turn this on if you want the bot to wait for cleaner Over 1 / Under 8 setups.">Guide filters</label>
               <input id="guideFilters" type="checkbox">
             </div>
 
@@ -1515,7 +1515,7 @@
         return `${event.tradeCooldownDetail}`;
       }
       if (reason === 'confidence_throttle') {
-        return `Confidence throttle active: ${remaining}s before the next growth entry`;
+        return `Risk delay active: ${remaining}s before martingale and sniper shots resume`;
       }
       if (reason === 'trade_failed') {
         return `Trade cooldown: ${remaining}s after a failed attempt`;
